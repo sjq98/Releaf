@@ -1,0 +1,18 @@
+{
+  "name": "releaf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Releaf: custom SME business tables, order change history and AI-assisted meeting follow-up.",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "lucide": "1.60.0"
+  }
+}

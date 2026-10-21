@@ -1,0 +1,238 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createStore } from "../src/store.js";
+import { createMeetingAI, extractionSchema, validateExtraction, validateMeeting } from "../src/meeting-ai.js";
+import { createApp } from "../src/server.js";
+
+const field = (id, type = "text", rest = {}) => ({ id, name: id, type, required: false, unique: false, options: [], ...rest });
+const fixture = (t) => {
+  const store = createStore(":memory:");
+  t.after(() => store.close());
+  const orders = store.bootstrap().form;
+  const order = store.createRecord(orders.id, { schemaVersion: orders.version, values: { orderNumber: "ORD-1", completed: "No" } }).record;
+  const todos = store.ensureMeetingTable();
+  return { store, orders, order, todos };
+};
+const create = (store, form, values) => store.createRecord(form.id, { schemaVersion: form.version, values }).record;
+const updateSchema = (store, form, fields) => store.updateForm(form.id, { version: form.version, name: form.name, fields });
+const meeting = { title: "Operations", date: "2026-10-21", text: "Alex will confirm ORD-1 by 2026-10-23. Sam will send the report." };
+const candidate = (orderId = null) => ({
+  values: { task: "Confirm order", owner: "Alex", dueDate: "2026-10-23", status: "Open", acceptance: null, relatedOrder: orderId },
+  evidence: "Alex will confirm ORD-1 by 2026-10-23.",
+});
+
+test("migrates an existing database without replacing its form, schema or records", () => {
+  const directory = mkdtempSync(join(tmpdir(), "module-migration-"));
+  const filename = join(directory, "old.sqlite");
+  let store;
+  try {
+    const old = new DatabaseSync(filename);
+    old.exec(`CREATE TABLE forms(id TEXT PRIMARY KEY, name TEXT NOT NULL, fields_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE records(id TEXT PRIMARY KEY, form_id TEXT NOT NULL, values_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT);`);
+    old.prepare("INSERT INTO forms VALUES (?, ?, ?, 7, ?, ?)").run("legacy", "My orders", JSON.stringify([field("custom")]), "2026-01-01", "2026-01-01");
+    old.prepare("INSERT INTO records VALUES ('record-1', 'legacy', ?, 3, '2026-01-01', '2026-01-01', NULL)").run(JSON.stringify({ custom: "Kept" }));
+    old.close();
+    store = createStore(filename);
+    assert.equal(store.getForm("legacy").moduleId, "orders");
+    assert.equal(store.getForm("legacy").version, 7);
+    assert.equal(store.getRecord("record-1").values.custom, "Kept");
+    assert.equal(store.getRecord("record-1").version, 3);
+    assert.equal(store.listForms().length, 1);
+  } finally {
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("creates the To-do table lazily and idempotently with correct module and reference", (t) => {
+  const { store, todos, orders } = fixture(t);
+  assert.equal(store.ensureMeetingTable().id, todos.id);
+  assert.equal(store.listForms().length, 2);
+  assert.equal(todos.moduleId, "meetings");
+  assert.deepEqual(todos.fields.find((field) => field.type === "reference").reference, { formId: orders.id, fieldId: "orderNumber" });
+  assert.equal(store.bootstrap().modules.length, 2);
+  assert.equal(store.bootstrap().meetingTableId, todos.id);
+  assert.throws(() => store.createForm({ name: "Wrong", moduleId: "unknown" }), { status: 400 });
+});
+
+test("a custom meeting table does not replace the module's To-do table", (t) => {
+  const store = createStore(":memory:");
+  t.after(() => store.close());
+  const custom = store.createForm({ name: "Notes", moduleId: "meetings" });
+  const todos = store.ensureMeetingTable();
+  assert.notEqual(custom.id, todos.id);
+  assert.equal(todos.name, "To-do Items");
+});
+
+test("reference fields only target unique scalar fields in other tables", (t) => {
+  const { store, orders } = fixture(t);
+  const ref = (formId, fieldId) => field("link", "reference", { reference: { formId, fieldId } });
+  for (const fields of [[field("x", "reference")], [ref(orders.id, "item")], [ref(orders.id, "missing")]]) {
+    assert.throws(() => store.createForm({ name: "Bad", fields }), { status: 400 });
+  }
+  assert.throws(() => store.createForm({ name: "Bad", fields: [ref("missing", "code")] }), { status: 404 });
+  assert.throws(() => updateSchema(store, orders, [...orders.fields, ref(orders.id, "orderNumber")]), { status: 400 });
+});
+
+test("references validate target identity and survive target unique-value changes", (t) => {
+  const { store, orders, order, todos } = fixture(t);
+  const task = create(store, todos, candidate(order.id).values);
+  const other = create(store, todos, { ...candidate().values, task: "Other" });
+  for (const id of ["missing", other.id, "invalid_id"]) {
+    assert.throws(() => create(store, todos, { ...candidate().values, relatedOrder: id }), { status: 400 });
+  }
+  store.updateRecord(order.id, { schemaVersion: orders.version, version: order.version, values: { orderNumber: "ORD-RENAMED" } });
+  assert.equal(store.getRecord(task.id).values.relatedOrder, order.id);
+  const target = store.bootstrap(todos.id).references.find((form) => form.id === orders.id);
+  assert.equal(target.records[0].values.orderNumber, "ORD-RENAMED");
+  assert.equal(store.listChanges(todos.id).at(-1).diff.find((diff) => diff.fieldId === "relatedOrder").reference.fieldId, "orderNumber");
+});
+
+test("protects referenced records and target schema until references are removed", (t) => {
+  const { store, orders, order, todos } = fixture(t);
+  const task = create(store, todos, candidate(order.id).values);
+  assert.throws(() => store.deleteRecord(order.id, { version: 1 }), { status: 409 });
+  assert.throws(() => updateSchema(store, orders, orders.fields.filter((field) => field.id !== "orderNumber")), { status: 409 });
+  assert.throws(() => updateSchema(store, orders, orders.fields.map((field) => field.id === "orderNumber" ? { ...field, unique: false } : field)), { status: 409 });
+  assert.throws(() => updateSchema(store, orders, orders.fields.map((field) => field.id === "orderNumber" ? { ...field, type: "longtext" } : field)), { status: 409 });
+  store.deleteRecord(task.id, { version: 1 });
+  store.deleteRecord(order.id, { version: 1 });
+  assert.equal(store.listRecords(orders.id).length, 0);
+});
+
+test("rejects blank referenced unique values and retargeting incompatible populated references", (t) => {
+  const { store, todos, order } = fixture(t);
+  const optional = store.createForm({ name: "Optional", fields: [field("code", "text", { unique: true })] });
+  const blank = create(store, optional, {});
+  const linked = store.createForm({ name: "Links", fields: [field("ref", "reference", { reference: { formId: optional.id, fieldId: "code" } })] });
+  assert.throws(() => create(store, linked, { ref: blank.id }), { status: 400 });
+  const filled = create(store, optional, { code: "ABC" });
+  create(store, linked, { ref: filled.id });
+  assert.throws(() => store.updateRecord(filled.id, { schemaVersion: 1, version: 1, values: { code: null } }), { status: 409 });
+  create(store, todos, candidate(order.id).values);
+  assert.throws(() => updateSchema(store, todos, todos.fields.map((field) => field.id === "relatedOrder" ? { ...field, reference: { formId: optional.id, fieldId: "code" } } : field)), { status: 409 });
+});
+
+test("meeting save is atomic, idempotent and retains source evidence", (t) => {
+  const { store, todos, order } = fixture(t);
+  const draft = store.saveExtraction(todos, meeting, [candidate(order.id), { ...candidate(), evidence: "Sam will send the report." }]);
+  const invalid = [{ index: 0, values: candidate(order.id).values }, { index: 1, values: { ...candidate().values, task: null } }];
+  assert.throws(() => store.commitExtraction(draft.id, { items: invalid }), { status: 400 });
+  assert.equal(store.listRecords(todos.id).length, 0);
+  assert.equal(store.listChanges(todos.id).length, 0);
+  const items = invalid.map((item, index) => ({ ...item, values: { ...item.values, task: `Task ${index}` } }));
+  const result = store.commitExtraction(draft.id, { items });
+  assert.equal(result.recordIds.length, 2);
+  assert.equal(store.getRecord(result.recordIds[0]).source.evidence, candidate().evidence);
+  assert.equal(store.getRecord(result.recordIds[0]).source.title, meeting.title);
+  assert.deepEqual(store.commitExtraction(draft.id, { items }).recordIds, result.recordIds);
+  assert.equal(store.listRecords(todos.id).length, 2);
+  assert.equal(store.getExtraction(draft.id).recordIds.length, 2);
+  assert.equal(store.bootstrap().meetings[0].committed, true);
+});
+
+test("rejects stale extraction schemas, duplicate indexes and unknown item fields", (t) => {
+  const { store, todos } = fixture(t);
+  const draft = store.saveExtraction(todos, meeting, [candidate()]);
+  assert.throws(() => store.commitExtraction(draft.id, { items: [null] }), { status: 400 });
+  assert.throws(() => store.commitExtraction(draft.id, { items: [{ index: 0, values: candidate().values }, { index: 0, values: candidate().values }] }), { status: 400 });
+  assert.throws(() => store.commitExtraction(draft.id, { items: [{ index: 0, values: { ...candidate().values, extra: "x" } }] }), { status: 400 });
+  updateSchema(store, todos, [...todos.fields, field("custom")]);
+  assert.throws(() => store.commitExtraction(draft.id, { items: [{ index: 0, values: candidate().values }] }), { status: 409 });
+  assert.throws(() => store.saveExtraction(todos, meeting, [candidate()]), { status: 409 });
+  assert.equal(store.listRecords(todos.id).length, 0);
+});
+
+test("rejects schema enum sizes unsupported by strict structured extraction", (t) => {
+  const { store, todos } = fixture(t);
+  const references = store.referenceCatalog().map((table) => ({
+    ...table, records: Array.from({ length: 500 }, (_, index) => ({
+      id: `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+      values: { orderNumber: `ORD-${index}` },
+    })),
+  }));
+  assert.throws(() => extractionSchema(todos, references), { status: 400 });
+  const options = Array.from({ length: 50 }, (_, index) => `Option ${index}`);
+  const form = { fields: Array.from({ length: 21 }, (_, index) => field(`select${index}`, "select", { options })) };
+  assert.throws(() => extractionSchema(form, []), { status: 400 });
+});
+
+test("AI schema includes custom columns, nullable unknowns and only real reference IDs", (t) => {
+  const { store, todos, order } = fixture(t);
+  const form = updateSchema(store, todos, [...todos.fields, field("budget", "number", { required: true })]);
+  const schema = extractionSchema(form, store.referenceCatalog());
+  const values = schema.properties.items.items.properties.values;
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(values.properties.budget.type, ["number", "null"]);
+  assert.deepEqual(values.properties.relatedOrder.enum, [order.id, null]);
+  const items = validateExtraction({ items: [{ ...candidate(order.id), values: { ...candidate(order.id).values, budget: null } }] }, form, meeting, store.referenceCatalog());
+  assert.equal(items[0].values.budget, null);
+});
+
+test("validates AI output, exact evidence, types, references and item limits", (t) => {
+  const { store, todos } = fixture(t);
+  const invalid = [
+    null, { items: "no" }, { items: [], sql: "anything" }, { items: Array(51).fill(candidate()) },
+    { items: [{ ...candidate(), evidence: "Invented quote" }] },
+    { items: [{ ...candidate(), values: {} }] },
+    { items: [{ ...candidate(), values: { ...candidate().values, dueDate: "tomorrow" } }] },
+    { items: [{ ...candidate(), values: { ...candidate().values, status: "Unknown" } }] },
+    { items: [{ ...candidate(), values: { ...candidate().values, relatedOrder: "missing" } }] },
+  ];
+  for (const output of invalid) assert.throws(() => validateExtraction(output, todos, meeting, store.referenceCatalog()), { status: 502 });
+  assert.equal(validateExtraction({ items: [] }, todos, meeting, []).length, 0);
+  assert.throws(() => validateMeeting({ ...meeting, date: "2026-02-30" }), { status: 400 });
+  assert.throws(() => validateMeeting({ ...meeting, text: "x".repeat(40001) }), { status: 400 });
+});
+
+test("AI adapter sends controlled schema and handles configuration, refusal, truncation and provider errors", async (t) => {
+  const { store, todos } = fixture(t);
+  const input = { form: todos, meeting, references: store.referenceCatalog() };
+  const noConfig = createMeetingAI({ env: {} });
+  assert.equal(noConfig.status.configured, false);
+  await assert.rejects(noConfig.extract(input), { status: 503 });
+  let sent;
+  const env = { AI_API_KEY: "test-only-key", AI_MODEL: "test-model", AI_BASE_URL: "https://example.invalid/v1/" };
+  const ai = createMeetingAI({ env, fetchImpl: async (url, options) => {
+    sent = { url, options };
+    return { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ items: [candidate()] }) } }] }) };
+  } });
+  assert.equal((await ai.extract(input)).items.length, 1);
+  assert.equal(sent.url, "https://example.invalid/v1/chat/completions");
+  assert.equal(JSON.parse(sent.options.body).response_format.json_schema.strict, true);
+  assert.equal(sent.options.headers.Authorization, "Bearer test-only-key");
+  for (const response of [
+    { ok: false, status: 429 },
+    { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { refusal: "No" } }] }) },
+    { ok: true, json: async () => ({ choices: [{ finish_reason: "length", message: {} }] }) },
+    { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { content: "not json" } }] }) },
+  ]) await assert.rejects(createMeetingAI({ env, fetchImpl: async () => response }).extract(input), { status: 502 });
+  await assert.rejects(createMeetingAI({ env, fetchImpl: async () => { throw new DOMException("Timeout", "TimeoutError"); } }).extract(input), /timed out/);
+});
+
+test("HTTP meeting workflow uses mocked AI, does not write until confirmed and exposes shared type modules", async (t) => {
+  let observed;
+  const app = createApp({ database: ":memory:", ai: { status: { configured: true, model: "mock" }, extract: async (input) => {
+    observed = input;
+    return { items: [candidate()] };
+  } } });
+  await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => app.server.close(resolve)); app.store.close(); });
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const post = (path, body) => fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const form = await (await post("/api/meetings/table", {})).json();
+  const response = await post("/api/meetings/extract", { ...meeting, formId: form.id });
+  assert.equal(response.status, 200);
+  const draft = await response.json();
+  assert.equal(app.store.listRecords(form.id).length, 0);
+  assert.deepEqual(Object.keys(observed.references[0].records[0] || {}), []);
+  assert.equal((await post(`/api/meetings/${draft.id}/commit`, { items: [{ index: 0, values: draft.items[0].values }] })).status, 200);
+  assert.equal(app.store.listRecords(form.id).length, 1);
+  assert.equal((await fetch(`${base}/api/meetings/${draft.id}`)).status, 200);
+  for (const path of ["/field-types.js", "/field-ui.js", "/errors.js"]) assert.equal((await fetch(base + path)).status, 200);
+  assert.equal((await fetch(`${base}/.env`)).status, 404);
+});

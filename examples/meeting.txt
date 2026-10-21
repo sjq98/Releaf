@@ -1,0 +1,8 @@
+Synthetic example: SME order follow-up
+Meeting date: 2026-10-22
+
+Alex will confirm the delivery time for order ORD-1001 with the customer by 2026-10-24.
+Priya will review the quantity for order ORD-1001 by 2026-10-23 and record the agreed quantity in the order.
+Sam will prepare a revised packing checklist by 2026-10-25. The checklist is complete when Alex approves it.
+
+The packaging budget is still under discussion. No owner or deadline has been agreed for the budget.

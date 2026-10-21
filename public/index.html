@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f2f3fa">
+    <title>Form Studio</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script defer src="/vendor/lucide.js"></script>
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div class="workspace">
+      <aside class="sidebar">
+        <a class="brand" href="#records" aria-label="Form Studio home"><span class="brand-mark"><i data-lucide="panels-top-left"></i></span><span class="brand-copy"><strong>Form Studio</strong><span>WORKSPACE</span></span></a>
+        <div class="sidebar-label">MODULES</div>
+        <nav class="navigation" id="module-navigation" aria-label="Business modules"></nav>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-context"><span class="context-dot"></span><span>Local workspace<small id="sidebar-form-count">1 form</small></span></div>
+        <div class="sidebar-foot">FORM STUDIO <span>/</span> 01</div>
+      </aside>
+      <main class="main-area">
+        <header class="topbar"><div class="breadcrumb"><span id="breadcrumb-form">Workspace</span><i data-lucide="chevron-right"></i><strong id="breadcrumb-current">Records</strong></div><div class="topbar-end"><button class="icon-button" data-ai-settings title="AI settings" aria-label="AI settings"><i data-lucide="bot"></i></button><span class="connection" id="connection-state"><span class="context-dot"></span><span id="connection-label">Connecting</span></span><span class="topbar-avatar" aria-label="Local workspace">W</span></div></header>
+        <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+        <section class="page-view" id="view-records">
+          <div class="page-heading"><div><div class="eyebrow">WORKSPACE <span class="eyebrow-divider"></span> RECORDS</div><h1 id="records-title">Orders</h1></div><div class="heading-actions"><button class="icon-button toolbar-icon" id="edit-table" title="Edit table fields" aria-label="Edit table fields"><i data-lucide="settings-2"></i></button><button class="button button-primary" id="create-record" disabled><i data-lucide="plus"></i><span>New record</span></button></div></div>
+          <div class="metrics" aria-label="Form overview">
+            <div class="metric"><span class="metric-label">Total records</span><strong class="metric-value" id="metric-total">0</strong><span class="metric-foot"><i data-lucide="files"></i> Active records</span></div>
+            <div class="metric"><span class="metric-label">Form fields</span><strong class="metric-value" id="metric-fields">0</strong><span class="metric-foot"><i data-lucide="columns-3"></i> Current schema</span></div>
+            <div class="metric"><span class="metric-label">Required fields</span><strong class="metric-value" id="metric-required">0</strong><span class="metric-foot"><i data-lucide="asterisk"></i> Required values</span></div>
+            <a class="metric metric-link" href="#activity" data-shortcut="activity"><span class="metric-label">Activity events</span><strong class="metric-value" id="metric-changes">0</strong><span class="metric-foot"><i data-lucide="arrow-up-right"></i> Record history</span></a>
+          </div>
+          <div class="section-heading"><div><h2>All records</h2><span class="section-count" id="visible-record-count">0 records</span></div><span class="section-context">Latest first</span></div>
+          <div class="toolbar"><label class="search-box"><i data-lucide="search"></i><input type="search" id="record-search" placeholder="Search all fields..." aria-label="Search records"></label><div class="toolbar-spacer"></div><button class="icon-button toolbar-icon" id="refresh-records" title="Refresh records" aria-label="Refresh records"><i data-lucide="refresh-cw"></i></button></div>
+          <div class="table-clip" id="record-table-wrap"><table class="data-table" id="records-table" aria-label="Records"><thead id="record-columns"></thead><tbody id="record-rows"></tbody></table><div class="empty-state" id="records-empty" hidden><span class="empty-mark"><i data-lucide="inbox"></i></span><h3 id="empty-title">No records yet</h3><button class="button button-secondary" id="empty-create"><i data-lucide="plus"></i><span>New record</span></button></div></div>
+          <div class="list-footer"><span id="sync-timestamp">Loading...</span><span><i data-lucide="database"></i> Local workspace</span></div>
+        </section>
+        <dialog class="modal builder-dialog" id="builder-dialog" aria-labelledby="builder-title">
+          <div class="modal-heading"><div><span class="eyebrow">TABLE SETTINGS</span><h2 id="builder-title">Edit table</h2></div><button class="icon-button" id="close-builder" aria-label="Close table settings" title="Close table settings"><i data-lucide="x"></i></button></div>
+          <div class="builder-meta"><div class="input-field"><label class="builder-label" for="form-name">Table name</label><input id="form-name" class="standalone-input" maxlength="80" autocomplete="off" disabled></div><span class="version-label" id="schema-version">Version 1</span></div>
+          <div class="section-heading"><div><h2>Fields</h2><span class="section-count" id="builder-field-count">0 fields</span></div><button class="button button-secondary" id="add-field" disabled><i data-lucide="plus"></i><span>Add field</span></button></div>
+          <div class="builder-column-labels" aria-hidden="true"><span>FIELD NAME</span><span>TYPE</span><span>REQUIRED</span><span>UNIQUE</span><span></span></div>
+          <div class="builder-fields" id="builder-fields"></div><div class="builder-error" id="builder-error" role="alert" hidden></div>
+          <div class="builder-footer"><span id="builder-save-state">All changes saved</span><div class="heading-actions"><button class="icon-button" id="reset-builder" aria-label="Discard unsaved changes" title="Discard unsaved changes" disabled><i data-lucide="undo-2"></i></button><button class="icon-button toolbar-icon" id="preview-form" aria-label="Preview form" title="Preview form" disabled><i data-lucide="eye"></i></button><button class="button button-primary" id="save-builder" disabled><i data-lucide="check"></i><span>Save table</span></button></div></div>
+        </dialog>
+        <section class="page-view" id="view-meeting" hidden>
+          <div class="page-heading"><div><div class="eyebrow">MEETING FOLLOW-UP</div><h1>Import meeting</h1></div><div class="ai-heading-status"><span class="ai-status" id="ai-status">AI not configured</span><button class="icon-button" data-ai-settings title="Configure AI provider" aria-label="Configure AI provider"><i data-lucide="sliders-horizontal"></i></button></div></div>
+          <form id="meeting-form" class="meeting-editor">
+            <div class="meeting-meta"><div class="input-field"><label class="builder-label" for="meeting-title">Meeting title</label><input class="standalone-input" id="meeting-title" maxlength="120" required></div><div class="input-field"><label class="builder-label" for="meeting-date">Meeting date</label><input class="standalone-input" type="date" id="meeting-date" required></div></div>
+            <div class="section-heading"><h2>Meeting text</h2><label class="button button-secondary upload-button"><i data-lucide="upload"></i><span>Import .txt</span><input type="file" id="meeting-file" accept=".txt,text/plain" class="sr-only"></label></div>
+            <textarea id="meeting-text" class="meeting-text" rows="12" maxlength="40000" required aria-label="Meeting text"></textarea>
+            <div class="meeting-actions"><span class="privacy-note">Meeting text and reference identifiers are sent to the configured AI provider.</span><button class="button button-primary" type="submit" id="extract-meeting"><i data-lucide="sparkles"></i><span>Extract action items</span></button></div>
+          </form>
+          <div class="form-error" id="meeting-error" role="alert" hidden></div>
+          <section id="meeting-review" hidden><div class="section-heading"><div><h2>Review action items</h2><span id="review-count" class="section-count"></span></div><button class="button button-primary" id="save-items"><i data-lucide="check"></i><span>Save selected</span></button></div><div id="review-items"></div></section>
+          <section class="meeting-history"><div class="section-heading"><h2>Recent imports</h2></div><div id="meeting-imports"></div></section>
+        </section>
+        <section class="page-view secondary-view" id="view-activity" hidden>
+          <div class="page-heading"><div><div class="eyebrow">WORKSPACE <span class="eyebrow-divider"></span> HISTORY</div><h1>Activity</h1></div><button class="icon-button toolbar-icon" id="refresh-activity" title="Refresh activity" aria-label="Refresh activity"><i data-lucide="refresh-cw"></i></button></div>
+          <div class="section-heading history-heading"><div><h2>Record history</h2><span class="section-count" id="history-count">0 events</span></div><span class="section-context">Latest first</span></div>
+          <div class="toolbar history-toolbar"><label class="search-box"><i data-lucide="search"></i><input type="search" id="history-search" placeholder="Search changes..." aria-label="Search activity"></label><div class="toolbar-spacer"></div><label class="filter-select"><i data-lucide="list-filter"></i><select id="history-kind" aria-label="Filter event type"><option value="all">All events</option><option value="created">Created</option><option value="updated">Updated</option><option value="deleted">Deleted</option></select><i data-lucide="chevron-down" class="select-chevron"></i></label></div>
+          <div class="history-list" id="history-list"></div><div class="empty-state history-empty" id="history-empty" hidden><span class="empty-mark"><i data-lucide="history"></i></span><h3>No activity yet</h3></div>
+        </section>
+      </main>
+    </div>
+    <dialog class="modal ai-settings-dialog" id="ai-settings-dialog" aria-labelledby="ai-settings-title">
+      <form id="ai-settings-form">
+        <div class="modal-heading"><div><span class="eyebrow">WORKSPACE SETTINGS</span><h2 id="ai-settings-title">AI provider</h2></div><button type="button" class="icon-button" id="close-ai-settings" aria-label="Close AI settings" title="Close AI settings"><i data-lucide="x"></i></button></div>
+        <div class="form-fields">
+          <div class="input-field"><label class="builder-label" for="ai-provider-name">Provider name <span class="required-dot">*</span></label><input class="standalone-input" id="ai-provider-name" maxlength="80" placeholder="e.g. OpenAI" required autocomplete="off"></div>
+          <div class="input-field"><label class="builder-label" for="ai-base-url">API base URL <span class="required-dot">*</span></label><input class="standalone-input" id="ai-base-url" type="url" maxlength="2048" placeholder="https://api.example.com/v1" required autocomplete="off"></div>
+          <div class="input-field"><div class="label-row"><label for="ai-api-key">API key <span class="required-dot">*</span></label><span class="label-note" id="ai-key-state"></span></div><div class="ai-key-input"><input class="standalone-input" id="ai-api-key" type="password" maxlength="8192" required autocomplete="off" spellcheck="false"><button class="icon-button" type="button" id="show-ai-key" title="Show API key" aria-label="Show API key" aria-pressed="false"><i data-lucide="eye"></i></button></div></div>
+          <div class="input-field"><div class="label-row"><label for="ai-model">Model <span class="required-dot">*</span></label><span class="label-note" id="ai-model-state" role="status"></span></div><div class="ai-model-picker"><select id="ai-model" class="standalone-input" required disabled><option value="">Select a model</option></select><button class="button button-secondary" type="button" id="load-ai-models"><i data-lucide="refresh-cw"></i><span>Fetch models</span></button></div></div>
+        </div>
+        <p class="ai-storage-note"><i data-lucide="database"></i><span>The API key is stored in the local database without encryption. Do not share the database file.</span></p>
+        <div class="form-error" id="ai-settings-error" role="alert" hidden></div>
+        <div class="modal-actions"><button class="button button-secondary" type="button" id="cancel-ai-settings">Cancel</button><button class="button button-primary" type="submit" id="save-ai-settings" disabled><i data-lucide="check"></i><span>Save settings</span></button></div>
+      </form>
+    </dialog>
+    <dialog class="modal" id="record-dialog" aria-labelledby="record-dialog-title"><form id="record-form" novalidate><div class="modal-heading"><div><span class="eyebrow" id="record-form-label">ORDERS</span><h2 id="record-dialog-title">New record</h2></div><button type="button" class="icon-button" data-close="record-dialog" aria-label="Close"><i data-lucide="x"></i></button></div><div id="record-source" class="source-evidence" hidden></div><div class="form-fields" id="record-fields"></div><div class="form-error" id="record-error" role="alert" hidden></div><div class="modal-actions"><button type="button" class="button button-secondary" data-close="record-dialog">Cancel</button><button type="submit" class="button button-primary" id="submit-record"><i data-lucide="check"></i><span>Save record</span></button></div></form></dialog>
+    <dialog class="modal" id="preview-dialog" aria-labelledby="preview-title"><div class="modal-heading"><div><span class="eyebrow">PREVIEW</span><h2 id="preview-title">Form</h2></div><button class="icon-button" data-close="preview-dialog" aria-label="Close preview"><i data-lucide="x"></i></button></div><div class="form-fields" id="preview-fields"></div><div class="modal-actions"><button class="button button-secondary" data-close="preview-dialog">Close</button></div></dialog>
+    <dialog class="modal compact-dialog" id="new-form-dialog" aria-labelledby="new-form-title"><form id="new-form-form"><div class="modal-heading"><div><span class="eyebrow">WORKSPACE</span><h2 id="new-form-title">Create table</h2></div><button type="button" class="icon-button" data-close="new-form-dialog" aria-label="Close"><i data-lucide="x"></i></button></div><div class="form-fields"><div class="input-field"><label class="builder-label" for="new-form-name">Table name <span class="required-dot">*</span></label><input class="standalone-input" id="new-form-name" placeholder="e.g. Suppliers" maxlength="80" required autocomplete="off"></div></div><div class="form-error" id="new-form-error" role="alert" hidden></div><div class="modal-actions"><button type="button" class="button button-secondary" data-close="new-form-dialog">Cancel</button><button type="submit" class="button button-primary" id="submit-new-form"><i data-lucide="plus"></i><span>Create table</span></button></div></form></dialog>
+    <dialog class="modal confirm-dialog" id="delete-dialog" aria-labelledby="delete-title"><div class="confirm-icon"><i data-lucide="trash-2"></i></div><h2 id="delete-title">Delete this record?</h2><p>The record will be removed. Its activity history will remain.</p><div class="modal-actions"><button class="button button-secondary" data-close="delete-dialog">Cancel</button><button class="button button-danger" id="confirm-delete"><i data-lucide="trash-2"></i><span>Delete record</span></button></div></dialog>
+    <dialog class="modal confirm-dialog" id="discard-dialog" aria-labelledby="discard-title"><h2 id="discard-title">Discard unsaved changes?</h2><p>Your form has changes that have not been saved.</p><div class="modal-actions"><button class="button button-secondary" data-close="discard-dialog">Keep editing</button><button class="button button-danger" id="confirm-discard">Discard changes</button></div></dialog>
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-relevant="additions text"></div>
+  </body>
+</html>
