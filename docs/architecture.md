@@ -10,11 +10,13 @@ Browser (public/)
 Node.js server (src/server.js)
     |-- store.js ---------> SQLite (data/forms.sqlite, not committed)
     |-- field-types.js ---> Shared normalization / validation
-    |-- modules.js -------> Order Management / Meeting Follow-up definitions
+    |-- modules.js -------> Order / Meeting / Supplier module definitions
     `-- ai-config.js -----> Upstream model list / saved configuration
              |
              `-- meeting-ai.js ---> Configured external AI provider
 ```
+
+The floating assistant adds `assistant.js` (server-owned conversations and tool-call loop), `agent-operations.js` (shared allowlisted queries/mutations), `agent-repository.js` (tokens, settings, conversations and action log), and `agent-http.js` (separate Agent and local-administration routes). `agent-openapi.js` derives external endpoint request schemas from the same tool definitions.
 
 The native Node.js HTTP server serves an explicit allowlist of browser assets. `src/field-types.js` and `src/errors.js` are deliberately served as shared browser modules; server-only code, environment files, and the database are not served. Moving source files into `src/` does not change the public asset URLs or the default database location.
 
@@ -35,16 +37,30 @@ Reference values hold target record IDs. Display labels are resolved from the ta
 5. The user corrects the draft and selects items.
 6. A transaction creates the selected records and retains source provenance. Repeating a completed commit returns the existing result.
 
-AI output is data, never executable SQL or application code. Tests mock provider responses; a passing suite does not prove that any particular upstream model supports strict structured output.
+AI output is data, never executable SQL or application code. Tests mock provider responses; a passing suite does not prove that any particular upstream model supports strict structured output or tool calling.
+
+## Supplier Reconciliation and Imports
+
+`table-import.js` validates generic row-to-field mappings and stores reviewed previews; `table-import-worker.js` parses XLSX/CSV in a time/memory-bounded worker using ExcelJS and csv-parse. Existing store methods validate previews inside rollback savepoints, then revalidate and commit the entire import transactionally. Imports append, never silently overwrite.
+
+`supplier-reconciliation.js` owns receipt/document defaults, schema-aware vision extraction, reviewed document commits and deterministic quantity matching. The browser renders PDF pages with PDF.js before sending page images to the configured workspace extraction provider. `workflow-repository.js` stores table roles, import drafts, original files, document provenance and comparison snapshots in SQLite.
+
+Receipt and supplier tables remain ordinary custom tables, so references, field edits, history and Agent record operations use existing store behavior. Supplier files and workflow routes are local administration only. Comparison results retain immutable computed data while allowing reviewed status/notes with version checks. Changed selected source rows or schemas mark snapshots stale. See [workflow details](supplier-reconciliation.md).
+
+## Assistant Operations and Approval
+
+Chat and external Agent APIs share one operation service. Writes run existing store methods inside a rollback savepoint to produce a validated preview. Approving runs the immutable request again, verifies expected versions (and table-record fingerprints for schema edits), and atomically commits both business data and action status. Idempotency keys prevent duplicate execution. Full access uses the same pipeline but applies immediately.
+
+The UI controls chat permissions; each external token has separate permissions. Agent tokens cannot call local approval/configuration routes. Token values are returned only at creation and stored as hashes. Revocation rejects pending proposals from that token. Preview creation does not leave records, unique indexes or business activity behind. Agent action history also records table-schema operations, which are not part of the existing record activity list.
 
 ## Configuration and Data
 
 Saved provider settings override environment fallback settings and apply without restarting. Environment changes require a restart. The API returns whether a key is present, never the saved key itself.
 
-SQLite stores business records, meeting source text, drafts, history, and saved provider credentials. Credentials are not encrypted at rest. Extraction sends meeting text, field definitions, and relevant reference identifiers/unique values to the chosen provider. No automatic data-retention policy is implemented.
+SQLite stores business records, meeting source text, drafts, history, assistant conversations/actions, token hashes, and saved provider credentials. Provider credentials and business content are not encrypted at rest. Meeting extraction and assistant providers are configured independently. Extraction sends meeting text, field definitions, and relevant reference identifiers/unique values to the chosen provider; chat sends conversation text and requested tool results. No automatic data-retention policy is implemented.
 
 ## Integration Status
 
-Orbyte integration, Replit deployment, and RunPod-specific integration are not implemented. The existing REST interface is a possible starting point for a future adapter, but it currently has no user authentication or authorization and rejects cross-origin browser requests.
+Orbyte integration, Replit deployment, and RunPod-specific integration are not implemented. `/api/agent/` provides Bearer-token authorization, OpenAPI discovery and approval-aware operations for future adapters. The local workspace still trusts loopback clients and has no user accounts, tenant ownership or authenticated human identity. Local programs can access legacy administration without a token; token separation is not a sandbox against software on the same computer. See [Agent API](agent-api.md).
 
 The local server binds to `127.0.0.1`; cloud deployment and multi-user access need explicit work. No diagram or configuration here claims a live sponsor-platform integration.

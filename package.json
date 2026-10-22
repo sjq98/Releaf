@@ -12,7 +12,16 @@
     "dev": "node --env-file-if-exists=.env --watch src/server.js",
     "test": "node --test"
   },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  },
   "dependencies": {
-    "lucide": "1.60.0"
+    "csv-parse": "7.0.3",
+    "decimal.js": "10.6.0",
+    "exceljs": "4.4.0",
+    "lucide": "1.60.0",
+    "pdfjs-dist": "6.4.299"
   }
 }

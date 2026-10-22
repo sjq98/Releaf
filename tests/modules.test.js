@@ -54,7 +54,7 @@ test("creates the To-do table lazily and idempotently with correct module and re
   assert.equal(store.listForms().length, 2);
   assert.equal(todos.moduleId, "meetings");
   assert.deepEqual(todos.fields.find((field) => field.type === "reference").reference, { formId: orders.id, fieldId: "orderNumber" });
-  assert.equal(store.bootstrap().modules.length, 2);
+  assert.equal(store.bootstrap().modules.length, 3);
   assert.equal(store.bootstrap().meetingTableId, todos.id);
   assert.throws(() => store.createForm({ name: "Wrong", moduleId: "unknown" }), { status: 400 });
 });

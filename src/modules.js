@@ -1,6 +1,7 @@
 export const MODULES = [
   { id: "orders", name: "Order Management", icon: "package" },
   { id: "meetings", name: "Meeting Follow-up", icon: "notebook-pen" },
+  { id: "suppliers", name: "Supplier Reconciliation", icon: "scan-line" },
 ];
 
 export const TODO_FIELDS = [

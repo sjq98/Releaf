@@ -75,6 +75,7 @@ export function createAIConfig({ store, env = process.env, fetchImpl = fetch, ti
   }
 
   return {
+    credentials: current,
     publicConfig,
     get status() {
       const { configured, model, providerName } = publicConfig();

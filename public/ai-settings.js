@@ -1,5 +1,5 @@
-export function initAISettings({ api, icons, onSaved }) {
-  const $ = (id) => document.getElementById(id);
+export function initAISettings({ api, icons, onSaved, namespace = "", endpoint = "/api/ai", triggerSelector = "[data-ai-settings]" }) {
+  const $ = (id) => document.getElementById(namespace + id);
   const dialog = $("ai-settings-dialog");
   const form = $("ai-settings-form");
   const provider = $("ai-provider-name");
@@ -51,7 +51,7 @@ export function initAISettings({ api, icons, onSaved }) {
     setBusy(true);
     dialog.showModal();
     try {
-      const settings = await api("/api/ai/config");
+      const settings = await api(`${endpoint}/config`);
       provider.value = settings.providerName;
       url.value = settings.baseUrl;
       key.required = !settings.hasApiKey;
@@ -65,7 +65,7 @@ export function initAISettings({ api, icons, onSaved }) {
   }
 
   function close() { if (!busy) dialog.close(); }
-  document.querySelectorAll("[data-ai-settings]").forEach((button) => button.addEventListener("click", open));
+  document.querySelectorAll(triggerSelector).forEach((button) => button.addEventListener("click", open));
   $("close-ai-settings").addEventListener("click", close);
   $("cancel-ai-settings").addEventListener("click", close);
   dialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
@@ -101,7 +101,7 @@ export function initAISettings({ api, icons, onSaved }) {
     setBusy(true);
     $("ai-model-state").textContent = "Loading models...";
     try {
-      const result = await api("/api/ai/models", { method: "POST", body: JSON.stringify(body) });
+      const result = await api(`${endpoint}/models`, { method: "POST", body: JSON.stringify(body) });
       options(result.models, selected);
       $("ai-model-state").textContent = `${result.models.length} ${result.models.length === 1 ? "model" : "models"} available`;
     } catch (cause) {
@@ -118,7 +118,7 @@ export function initAISettings({ api, icons, onSaved }) {
     setBusy(true);
     $("save-ai-settings").querySelector("span").textContent = "Saving...";
     try {
-      const settings = await api("/api/ai/config", { method: "PUT", body: JSON.stringify(body) });
+      const settings = await api(`${endpoint}/config`, { method: "PUT", body: JSON.stringify(body) });
       onSaved(settings);
       dialog.close();
     } catch (cause) { error(cause.message); }

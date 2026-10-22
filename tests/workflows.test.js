@@ -1,0 +1,307 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import ExcelJS from "exceljs";
+import { createStore } from "../src/store.js";
+import { createTableImport, parseTableFile } from "../src/table-import.js";
+import { createSupplierService } from "../src/supplier-reconciliation.js";
+import { createApp } from "../src/server.js";
+
+const field = (id, type = "text", extra = {}) => ({ id, name: id, type, required: false, unique: false, options: [], ...extra });
+const create = (store, form, values) => store.createRecord(form.id, { schemaVersion: form.version, values }).record;
+function fixture(t) {
+  const store = createStore(":memory:");
+  t.after(() => store.close());
+  const orders = store.bootstrap().form;
+  const order = create(store, orders, { orderNumber: "0001", completed: "No" });
+  const supplier = createSupplierService({ store, aiConfig: { credentials: () => ({}) } });
+  const forms = supplier.ensureTables();
+  const base = { relatedOrder: order.id, supplier: "Acme", itemCode: "SKU-01", unit: "pcs", quantity: 10 };
+  const receipt = (values = {}) => create(store, forms.receipts, { ...base, lineId: `R-${Math.random()}`, receiptNumber: "GR-1", receivedAt: "2026-10-22", ...values });
+  const document = (values = {}) => create(store, forms.documents, { ...base, lineId: `D-${Math.random()}`, documentNumber: "DO-1", documentType: "Delivery note", ...values });
+  const config = (receipts, documents) => ({ documentType: "Delivery note",
+    receipts: { formId: forms.receipts.id, schemaVersion: 1, recordIds: receipts.map((row) => row.id), mapping: { order: "relatedOrder", item: "itemCode", quantity: "quantity", unit: "unit", supplier: "supplier" } },
+    documents: { formId: forms.documents.id, schemaVersion: 1, recordIds: documents.map((row) => row.id), mapping: { order: "relatedOrder", item: "itemCode", quantity: "quantity", unit: "unit", supplier: "supplier", documentType: "documentType" } },
+  });
+  return { store, orders, order, supplier, forms, receipt, document, config };
+}
+const file = (name, data) => ({ name, data: Buffer.from(data).toString("base64") });
+const image = file("delivery.png", Buffer.from("89504e470d0a1a0a0000", "hex"));
+const page = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
+const recognition = (form, orderId) => ({
+  items: [{ values: Object.fromEntries(form.fields.filter((field) => field.id !== "lineId").map((field) => [field.id, {
+    documentNumber: "DO-AI", documentType: "Delivery note", documentDate: "2026-10-22", relatedOrder: orderId, supplier: "Acme",
+    itemCode: "SKU-01", quantity: 10, unit: "pcs",
+  }[field.id] ?? null])), evidence: "SKU-01 10 pcs", page: 1 }],
+});
+
+test("supplier tables are lazy, idempotent, editable and use nonunique order references", (t) => {
+  const { store, supplier, forms, receipt } = fixture(t);
+  assert.equal(supplier.ensureTables().receipts.id, forms.receipts.id);
+  assert.equal(store.listForms().length, 3);
+  receipt(); receipt();
+  assert.equal(store.listRecords(forms.receipts.id).length, 2);
+  assert.equal(forms.receipts.fields.find((field) => field.id === "relatedOrder").unique, false);
+  assert.equal(store.bootstrap().supplierTables.documents, forms.documents.id);
+  const edited = store.updateForm(forms.receipts.id, { ...forms.receipts, fields: [...forms.receipts.fields, field("warehouse")] });
+  assert.equal(edited.fields.at(-1).id, "warehouse");
+});
+
+test("reconciliation aggregates split receipts exactly with decimal quantities", (t) => {
+  const { supplier, receipt, document, config } = fixture(t);
+  const result = supplier.run(config([receipt({ quantity: .1 }), receipt({ quantity: .2 })], [document({ quantity: .3 })]));
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].outcome, "Matched");
+  assert.equal(result.rows[0].difference, 0);
+  assert.equal(result.rows[0].receipts.length, 2);
+});
+
+test("reconciliation only includes explicitly selected receipt batches", (t) => {
+  const { supplier, receipt, document, config } = fixture(t);
+  const first = receipt({ quantity: 40 });
+  receipt({ quantity: 60 });
+  const result = supplier.run(config([first], [document({ quantity: 40 })]));
+  assert.equal(result.rows[0].receiptQuantity, 40);
+  assert.equal(result.rows[0].outcome, "Matched");
+});
+
+test("reconciliation identifies mismatch, missing sides and case-insensitive exact item matches", (t) => {
+  const { supplier, receipt, document, config } = fixture(t);
+  const result = supplier.run(config([receipt(), receipt({ itemCode: "OnlyReceipt" })], [document({ quantity: 12, itemCode: "sku-01" }), document({ itemCode: "OnlyDocument" })]));
+  const mismatch = result.rows.find((row) => row.outcome === "Quantity mismatch");
+  assert.equal(mismatch.difference, 2);
+  assert.equal(result.rows.find((row) => row.outcome === "Missing receipt").receiptQuantity, null);
+  assert.equal(result.rows.find((row) => row.outcome === "Missing document").documentQuantity, null);
+});
+
+test("unit conflicts and returns require review and are never silently converted", (t) => {
+  const { supplier, receipt, document, config } = fixture(t);
+  const result = supplier.run(config([receipt(), receipt({ itemCode: "RETURN", quantity: -3 })], [document({ unit: "box" }), document({ itemCode: "RETURN" })]));
+  const units = result.rows.filter((row) => row.item === "SKU-01");
+  assert.ok(units.every((row) => row.outcome === "Needs review" && row.difference === null));
+  assert.ok(result.rows.some((row) => row.item === "RETURN" && row.outcome === "Needs review"));
+});
+
+test("different suppliers are not netted and document types cannot be mixed", (t) => {
+  const { supplier, receipt, document, config } = fixture(t);
+  const rec = receipt(), doc = document({ supplier: "Other" });
+  assert.equal(supplier.run(config([rec], [doc])).rows.length, 2);
+  assert.throws(() => supplier.run(config([rec], [document({ documentType: "Invoice" })])), { status: 400 });
+  const empty = config([], [doc]);
+  assert.throws(() => supplier.run(empty), { status: 400 });
+  const wrong = config([doc], [doc]);
+  assert.throws(() => supplier.run(wrong), { status: 400 });
+});
+
+test("result reviews have concurrency checks; source mutation marks a preserved snapshot stale", (t) => {
+  const { store, supplier, forms, receipt, document, config } = fixture(t);
+  const rec = receipt(), doc = document({ quantity: 12 });
+  const run = supplier.run(config([rec], [doc]));
+  const reviewed = supplier.updateResult(run.id, { version: 1, rowId: run.rows[0].id, status: "In progress", notes: "Check batch" });
+  assert.equal(reviewed.version, 2);
+  assert.equal(reviewed.rows[0].notes, "Check batch");
+  assert.throws(() => supplier.updateResult(run.id, { version: 1, rowId: run.rows[0].id, status: "Resolved", notes: "" }), { status: 409 });
+  store.updateRecord(rec.id, { schemaVersion: forms.receipts.version, version: rec.version, values: { quantity: 12 } });
+  const stale = supplier.getRun(run.id);
+  assert.equal(stale.stale, true);
+  assert.equal(stale.rows[0].receiptQuantity, 10);
+  assert.throws(() => supplier.updateResult(run.id, { version: 2, rowId: run.rows[0].id, status: "Resolved", notes: "" }), { status: 409 });
+  assert.equal(supplier.listRuns()[0].stale, true);
+});
+
+test("schema changes and deletion invalidate results, while unrelated new rows do not", (t) => {
+  const { store, supplier, forms, receipt, document, config } = fixture(t);
+  const rec = receipt(), doc = document(), run = supplier.run(config([rec], [doc]));
+  receipt({ quantity: 50 });
+  assert.equal(supplier.getRun(run.id).stale, false);
+  store.deleteRecord(doc.id, { version: doc.version });
+  assert.equal(supplier.getRun(run.id).stale, true);
+  const second = supplier.run(config([rec], [document()]));
+  store.updateForm(forms.receipts.id, { ...forms.receipts, fields: [...forms.receipts.fields, field("warehouse")] });
+  assert.equal(supplier.getRun(second.id).stale, true);
+});
+
+test("flexible field mappings reconcile imported custom tables without depending on field names", (t) => {
+  const { store, supplier, order, orders, document, config } = fixture(t);
+  const form = store.createForm({ name: "Imported receipts", moduleId: "suppliers", fields: [
+    field("po", "reference", { reference: { formId: orders.id, fieldId: "orderNumber" } }), field("sku"), field("amount", "number"), field("uom"), field("vendor"),
+  ] });
+  const rec = create(store, form, { po: order.id, sku: "SKU-01", amount: 10, uom: "pcs", vendor: "Acme" });
+  const input = config([], [document()]);
+  input.receipts = { formId: form.id, schemaVersion: 1, mapping: { order: "po", item: "sku", quantity: "amount", unit: "uom", supplier: "vendor" }, recordIds: [rec.id] };
+  assert.equal(supplier.run(input).rows[0].outcome, "Matched");
+});
+
+test("CSV parser preserves identifiers, quoted commas, BOM, zero and blank values", async () => {
+  const result = await parseTableFile(file("orders.csv", '\ufeffOrder,Description,Quantity\r\n0001,"Widget, large",0\r\n0002,,\r\n'));
+  assert.deepEqual(result.sheets[0].rows[1], ["0001", "Widget, large", "0"]);
+  assert.deepEqual(result.sheets[0].rows[2], ["0002", "", ""]);
+});
+
+test("XLSX parser handles sheets, dates, formatted identifiers and cached formulas", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Receipts");
+  sheet.addRow(["Order", "Quantity", "Date"]);
+  sheet.addRow([1, { formula: "1+2", result: 3 }, new Date("2026-10-22T00:00:00Z")]);
+  sheet.getCell("A2").numFmt = "0000";
+  workbook.addWorksheet("Other").addRow(["Code"]);
+  const result = await parseTableFile(file("receipt.xlsx", await workbook.xlsx.writeBuffer()));
+  assert.equal(result.sheets.length, 2);
+  assert.deepEqual(result.sheets[0].rows[1], ["0001", 3, "2026-10-22T00:00:00.000Z"]);
+});
+
+test("file parser rejects unsupported, oversized, excessive rows and formulas without cached results", async () => {
+  await assert.rejects(parseTableFile(file("old.xls", "no")), { status: 400 });
+  await assert.rejects(parseTableFile(file("large.csv", "x".repeat(5 * 1024 * 1024 + 1))), { status: 400 });
+  await assert.rejects(parseTableFile(file("many.csv", "a\n".repeat(1102))), { status: 400 });
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet("Data").getCell("A1").value = { formula: "NOW()" };
+  await assert.rejects(parseTableFile(file("uncached.xlsx", await workbook.xlsx.writeBuffer())), /saved result/);
+});
+
+test("table import preview writes nothing, resolves references and commits atomically and idempotently", (t) => {
+  const { store, forms, order } = fixture(t);
+  const importer = createTableImport(store);
+  const input = { formId: forms.receipts.id, schemaVersion: 1,
+    mapping: { lineId: 0, receiptNumber: 1, receivedAt: 2, relatedOrder: 3, supplier: 4, itemCode: 5, quantity: 6, unit: 7 },
+    rows: [["R-1", "GR-1", "2026-10-22", "0001", "Acme", "SKU-01", "3", "pcs"], ["R-2", "GR-2", "2026-10-22", "0001", "Acme", "SKU-01", "7", "pcs"]] };
+  const draft = importer.preview(input);
+  assert.equal(draft.errors.length, 0);
+  assert.equal(draft.rows[0].relatedOrder, order.id);
+  assert.equal(store.listRecords(forms.receipts.id).length, 0);
+  assert.equal(store.listChanges(forms.receipts.id).length, 0);
+  const result = importer.commit(draft.id);
+  assert.equal(result.recordIds.length, 2);
+  assert.equal(importer.commit(draft.id).alreadySaved, true);
+  assert.throws(() => importer.preview(input), { status: 409 });
+});
+
+test("table import collects row errors for missing references, duplicates, ambiguous numbers and missing values", (t) => {
+  const { store, orders } = fixture(t);
+  const importer = createTableImport(store);
+  const draft = importer.preview({ formId: orders.id, schemaVersion: 1, mapping: { orderNumber: 0, quantity: 1, completed: 2 },
+    rows: [["NEW", "1,000", "No"], ["0001", "1", "No"], ["OK", "2", "Wrong"]] });
+  assert.equal(draft.errors.length, 3);
+  assert.throws(() => importer.commit(draft.id), { status: 400 });
+  assert.equal(store.listRecords(orders.id).length, 1);
+  const refs = store.createForm({ name: "Refs", fields: [field("ref", "reference", { reference: { formId: orders.id, fieldId: "orderNumber" } })] });
+  const bad = importer.preview({ formId: refs.id, schemaVersion: 1, mapping: { ref: 0 }, rows: [["UNKNOWN"]] });
+  assert.equal(bad.errors[0].fields.ref, "No matching unique value in the referenced table.");
+});
+
+test("new-table import preview leaves no tables; validation failure rolls back; schema races are rejected", (t) => {
+  const { store, orders } = fixture(t);
+  const importer = createTableImport(store), before = store.listForms().length;
+  const draft = importer.preview({ name: "Inventory", moduleId: "suppliers", fields: [field("sku", "text", { unique: true, required: true })], mapping: { sku: 0 }, rows: [["A"], ["B"]] });
+  assert.equal(store.listForms().length, before);
+  const result = importer.commit(draft.id);
+  assert.equal(store.getForm(result.formId).name, "Inventory");
+  assert.equal(store.listRecords(result.formId).length, 2);
+  const existing = importer.preview({ formId: orders.id, schemaVersion: 1, mapping: { orderNumber: 0, completed: 1 }, rows: [["PO-NEW", "No"]] });
+  store.updateForm(orders.id, { ...orders, name: "Renamed" });
+  assert.throws(() => importer.commit(existing.id), { status: 409 });
+});
+
+test("import commit revalidates concurrent uniqueness without partial inserts", (t) => {
+  const { store, orders } = fixture(t);
+  const importer = createTableImport(store);
+  const draft = importer.preview({ formId: orders.id, schemaVersion: 1, mapping: { orderNumber: 0, completed: 1 }, rows: [["A", "No"], ["B", "No"]] });
+  create(store, orders, { orderNumber: "B", completed: "No" });
+  assert.throws(() => importer.commit(draft.id), { status: 409 });
+  assert.equal(store.listRecords(orders.id).length, 2);
+});
+
+test("recognition remains a draft until approval and retains source files and page evidence", async (t) => {
+  const { store, order, forms } = fixture(t);
+  const service = createSupplierService({ store, documentAI: async ({ form }) => recognition(form, order.id) });
+  const draft = await service.extract({ file: image, images: [page] });
+  assert.equal(store.listRecords(forms.documents.id).length, 0);
+  assert.equal(service.listDocuments()[0].committed, false);
+  assert.equal(service.getDocumentDraft(draft.id).fileName, image.name);
+  const result = service.commitDocument(draft.id, { items: draft.items.map((item, index) => ({ index, values: item.values })) });
+  const record = store.getRecord(result.recordIds[0]);
+  assert.equal(record.documentSource.page, 1);
+  assert.equal(record.documentSource.evidence, "SKU-01 10 pcs");
+  assert.equal(store.workflows.file(record.documentSource.fileId).mime, "image/png");
+  assert.equal(service.commitDocument(draft.id, {}).alreadySaved, true);
+  assert.deepEqual(service.getDocumentDraft(draft.id).recordIds, result.recordIds);
+  await assert.rejects(service.extract({ file: image, images: [page] }), { status: 409 });
+});
+
+test("document adapter sends image pages, controlled schema and server-only credentials; upstream failures remain actionable", async (t) => {
+  const { store, order } = fixture(t);
+  const config = { apiKey: "test-placeholder-key", baseUrl: "https://example.invalid/v1", model: "vision-test" };
+  let sent;
+  const service = createSupplierService({ store, aiConfig: { credentials: () => config }, fetchImpl: async (url, options) => {
+    sent = { url, options };
+    const form = store.getForm(store.workflows.tables().documents);
+    return { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(recognition(form, order.id)) } }] }) };
+  } });
+  await service.extract({ file: image, images: [page] });
+  assert.equal(sent.url, "https://example.invalid/v1/chat/completions");
+  assert.equal(sent.options.headers.Authorization, "Bearer test-placeholder-key");
+  const body = JSON.parse(sent.options.body);
+  assert.equal(body.messages[1].content[1].image_url.url, page);
+  assert.equal(body.response_format.json_schema.strict, true);
+  for (const response of [
+    { ok: false, status: 400 },
+    { ok: true, json: async () => ({ choices: [{ finish_reason: "length", message: {} }] }) },
+    { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { content: "not JSON" } }] }) },
+  ]) {
+    const bad = createSupplierService({ store, aiConfig: { credentials: () => config }, fetchImpl: async () => response });
+    await assert.rejects(bad.extract({ file: image, images: [page] }), { status: 502 });
+  }
+  const missing = createSupplierService({ store, aiConfig: { credentials: () => ({}) } });
+  await assert.rejects(missing.extract({ file: image, images: [page] }), { status: 503 });
+});
+
+test("document confirmation validates required fields and duplicate supplier document numbers", async (t) => {
+  const { store, order, forms } = fixture(t);
+  const service = createSupplierService({ store, documentAI: async ({ form }) => recognition(form, order.id) });
+  const draft = await service.extract({ file: image, images: [page] });
+  const values = { ...draft.items[0].values, relatedOrder: null };
+  assert.throws(() => service.commitDocument(draft.id, { items: [{ index: 0, values }] }), { status: 400 });
+  assert.equal(store.listRecords(forms.documents.id).length, 0);
+  create(store, forms.documents, draft.items[0].values);
+  assert.throws(() => service.commitDocument(draft.id, { items: [{ index: 0, values: draft.items[0].values }] }), { status: 409 });
+});
+
+test("recognition rejects malformed output, unknown references, invalid page evidence and stale schemas", async (t) => {
+  const { store, order, forms } = fixture(t);
+  for (const modify of [
+    (data) => { data.items[0].page = 2; },
+    (data) => { data.items[0].values.relatedOrder = "missing"; },
+    (data) => { data.items[0].values.quantity = "10"; },
+    (data) => { delete data.items[0].values.unit; },
+    (data) => { data.items[0].evidence = ""; },
+  ]) {
+    const service = createSupplierService({ store, documentAI: async ({ form }) => { const data = recognition(form, order.id); modify(data); return data; } });
+    await assert.rejects(service.extract({ file: image, images: [page] }), { status: 502 });
+  }
+  const service = createSupplierService({ store, documentAI: async ({ form }) => recognition(form, order.id) });
+  const draft = await service.extract({ file: image, images: [page] });
+  store.updateForm(forms.documents.id, { ...forms.documents, name: "Supplier lines" });
+  assert.throws(() => service.commitDocument(draft.id, { items: [{ index: 0, values: draft.items[0].values }] }), { status: 409 });
+});
+
+test("HTTP workflows apply local-only security, serve assets, and support import and reconciliation routes", async (t) => {
+  const app = createApp({ database: ":memory:", documentAI: async ({ form }) => recognition(form, null) });
+  await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => app.server.close(resolve)); app.store.close(); });
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const request = (path, body, method = "POST") => fetch(base + path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const forms = await (await request("/api/suppliers/tables", {})).json();
+  assert.equal(forms.receipts.moduleId, "suppliers");
+  const parsed = await (await request("/api/imports/parse", { file: file("data.csv", "Code\n0001") })).json();
+  assert.equal(parsed.sheets[0].rows[1][0], "0001");
+  const preview = await (await request("/api/imports/preview", { name: "Imported", moduleId: "meetings", fields: [field("code")], mapping: { code: 0 }, rows: [["0001"]] })).json();
+  assert.equal((await request(`/api/imports/${preview.id}/commit`, {})).status, 200);
+  const draft = await (await request("/api/suppliers/extract", { file: image, images: [page] })).json();
+  assert.equal(draft.items.length, 1);
+  const downloaded = await fetch(`${base}/api/suppliers/files/${draft.fileId}`);
+  assert.match(downloaded.headers.get("content-disposition"), /attachment/);
+  assert.equal(downloaded.headers.get("content-type"), "image/png");
+  assert.equal((await fetch(`${base}/api/reconciliations`)).status, 200);
+  for (const path of ["/supplier.js", "/table-import.js", "/workflows.css", "/vendor/pdf.mjs", "/vendor/pdf.worker.mjs"]) assert.equal((await fetch(base + path)).status, 200);
+  assert.equal((await fetch(`${base}/api/imports/preview`, { method: "POST", headers: { Origin: "https://attacker.invalid" } })).status, 403);
+  assert.equal((await fetch(`${base}/api/suppliers/tables`, { method: "POST", headers: { Authorization: "Bearer test" } })).status, 403);
+});

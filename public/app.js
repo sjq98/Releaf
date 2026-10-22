@@ -1,11 +1,15 @@
 import { FIELD_DEFINITIONS as TYPES, inputValue } from "/field-types.js";
 import { fieldDisplay, renderFieldInput, renderFieldCell } from "/field-ui.js";
 import { initAISettings } from "/ai-settings.js";
+import { initAssistant } from "/assistant.js";
+import { initTableImport } from "/table-import.js";
+import { initSupplier } from "/supplier.js";
 const KIND_LABELS = { created: "Record created", updated: "Record updated", deleted: "Record deleted" };
 const state = {
   form: null, forms: [], records: [], changes: [], view: "records", search: "", historySearch: "", historyKind: "all",
   draft: null, editing: null, deleting: null, busy: false, builderBusy: false, pendingAction: null, loadNumber: 0,
   modules: [], references: [], meetings: [], ai: {}, extraction: null, extracting: false, committing: false, meetingTableId: null,
+  supplierTables: {},
 };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -59,6 +63,9 @@ const aiSettings = initAISettings({ api, icons, onSaved(settings) {
   renderAIStatus();
   toast("AI settings saved. Ready for extraction.");
 } });
+initAssistant({ api, icons, onChanged: refresh });
+const spreadsheetImport = initTableImport({ api, icons, toast, getState: () => state, onImported: (id) => navigateTable(id) });
+const supplier = initSupplier({ api, icons, toast, getState: () => state, refresh, openAISettings: () => aiSettings.open() });
 
 function formatTimestamp(value) {
   return new Intl.DateTimeFormat("en-GB", { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
@@ -74,7 +81,10 @@ function renderSidebar() {
     const forms = state.forms.filter((form) => form.moduleId === module.id);
     return `<div class="module-group"><div class="module-heading">${icon(module.icon)}<span>${esc(module.name)}</span><button class="icon-button" data-new-table="${module.id}" title="New table" aria-label="New table in ${esc(module.name)}">${icon("plus")}</button></div>
       ${module.id === "meetings" ? `<button class="nav-item subnav ${state.view === "meeting" ? "is-active" : ""}" data-meeting>${icon("file-input")}<span>Import meeting</span></button>` : ""}
+      ${module.id === "suppliers" ? `<button class="nav-item subnav ${state.view === "document" ? "is-active" : ""}" data-supplier-view="document">${icon("scan-text")}<span>Document recognition</span></button>` : ""}
       ${forms.map((form) => `<button class="nav-item subnav ${active && form.id === state.form.id && state.view === "records" ? "is-active" : ""}" data-table="${form.id}">${icon("table-2")}<span>${esc(form.name)}</span><span class="nav-count">${form.recordCount}</span></button>`).join("")}
+      ${module.id === "suppliers" && !state.supplierTables.receipts ? `<button class="nav-item subnav" data-supplier-view="records">${icon("truck")}<span>Goods Receipts</span><span class="nav-count">0</span></button><button class="nav-item subnav" data-supplier-view="supplier-records">${icon("files")}<span>Supplier Documents</span><span class="nav-count">0</span></button>` : ""}
+      ${module.id === "suppliers" ? `<button class="nav-item subnav ${state.view === "reconciliation" ? "is-active" : ""}" data-supplier-view="reconciliation">${icon("git-compare-arrows")}<span>Reconciliation results</span></button>` : ""}
       ${module.id === "meetings" && !state.meetingTableId ? `<button class="nav-item subnav" data-todos>${icon("list-todo")}<span>To-do Items</span><span class="nav-count">0</span></button>` : ""}
       ${active ? `<button class="nav-item subnav ${state.view === "activity" ? "is-active" : ""}" data-view="activity">${icon("history")}<span>Activity</span></button>` : ""}</div>`;
   }).join("");
@@ -169,9 +179,10 @@ function renderView(view) {
     if (current) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  $("breadcrumb-current").textContent = { records: "Records", meeting: "Import meeting", activity: "Activity" }[view];
+  $("breadcrumb-current").textContent = { records: "Records", meeting: "Import meeting", activity: "Activity", document: "Document recognition", reconciliation: "Reconciliation" }[view];
   history.replaceState(null, "", `#${view}`);
   renderSidebar();
+  supplier.enter(view);
 }
 
 async function load(formId = state.form?.id, preserveDraft = false) {
@@ -184,6 +195,7 @@ async function load(formId = state.form?.id, preserveDraft = false) {
   state.changes = data.changes;
   state.modules = data.modules; state.references = data.references; state.meetings = data.meetings; state.ai = data.ai;
   state.meetingTableId = data.meetingTableId;
+  state.supplierTables = data.supplierTables || {};
   if (!preserveDraft) state.draft = clone(state.form);
   const url = new URL(location.href);
   url.searchParams.set("formId", state.form.id);
@@ -225,8 +237,10 @@ function openRecord(recordId = null) {
   $("record-dialog-title").textContent = record ? "Edit record" : "New record";
   $("record-form-label").textContent = state.form.name;
   $("record-fields").innerHTML = state.form.fields.map((field) => makeInput(field, record?.values[field.id])).join("");
-  $("record-source").hidden = !record?.source;
-  $("record-source").innerHTML = record?.source ? `<strong>${esc(record.source.title)} · ${esc(record.source.date)}</strong><blockquote>${esc(record.source.evidence)}</blockquote>` : "";
+  $("record-source").hidden = !record?.source && !record?.documentSource;
+  $("record-source").innerHTML = record?.documentSource
+    ? `<a class="reference-link" href="/api/suppliers/files/${record.documentSource.fileId}" download>${icon("file-down")}<span>${esc(record.documentSource.name)}</span></a><strong> · Page ${record.documentSource.page}</strong><blockquote>${esc(record.documentSource.evidence)}</blockquote>`
+    : record?.source ? `<strong>${esc(record.source.title)} · ${esc(record.source.date)}</strong><blockquote>${esc(record.source.evidence)}</blockquote>` : "";
   $("record-error").hidden = true;
   $("submit-record").innerHTML = `${icon("check")}<span>${record ? "Save changes" : "Save record"}</span>`;
   $("record-dialog").showModal();
@@ -344,7 +358,7 @@ function openBuilder() {
 }
 
 async function navigateTable(id, view = "records", recordId = null) {
-  if (state.extracting || state.committing) return toast("Wait for the current import operation to finish.", true);
+  if (state.extracting || state.committing || supplier.isBusy()) return toast("Wait for the current import operation to finish.", true);
   try {
     if (state.form?.id !== id) await switchForm(id);
     renderView(view);
@@ -357,6 +371,18 @@ async function openMeeting(view = "meeting") {
   try {
     const formId = state.meetingTableId || (await api("/api/meetings/table", { method: "POST", body: "{}" })).id;
     await navigateTable(formId, view);
+  } catch (error) { toast(error.message, true); }
+}
+
+async function openSupplier(view) {
+  if (supplier.isBusy()) return;
+  try {
+    if (!state.supplierTables.receipts || !state.supplierTables.documents) {
+      await api("/api/suppliers/tables", { method: "POST", body: "{}" });
+      await refresh();
+    }
+    const id = view === "supplier-records" || view === "document" ? state.supplierTables.documents : state.supplierTables.receipts;
+    await navigateTable(id, view === "supplier-records" ? "records" : view);
   } catch (error) { toast(error.message, true); }
 }
 
@@ -515,6 +541,7 @@ $("record-search").addEventListener("input", (event) => { state.search = event.t
 $("history-search").addEventListener("input", (event) => { state.historySearch = event.target.value; if (state.form) renderActivity(); });
 $("history-kind").addEventListener("change", (event) => { state.historyKind = event.target.value; if (state.form) renderActivity(); });
 $("refresh-records").addEventListener("click", refresh);
+$("import-spreadsheet").addEventListener("click", () => guardDraft(() => spreadsheetImport.open()));
 $("refresh-activity").addEventListener("click", refresh);
 $("confirm-discard").addEventListener("click", () => {
   const action = state.pendingAction;
@@ -570,6 +597,8 @@ document.addEventListener("click", (event) => {
   if (table) guardDraft(() => navigateTable(table.dataset.table));
   if (event.target.closest("[data-meeting]")) guardDraft(() => openMeeting());
   if (event.target.closest("[data-todos]")) guardDraft(() => openMeeting("records"));
+  const supplierView = event.target.closest("[data-supplier-view]");
+  if (supplierView) guardDraft(() => openSupplier(supplierView.dataset.supplierView));
   const createTable = event.target.closest("[data-new-table]");
   if (createTable) newTable(createTable.dataset.newTable);
   const view = event.target.closest("[data-view]");
@@ -598,18 +627,20 @@ document.addEventListener("click", (event) => {
 window.addEventListener("beforeunload", (event) => { if (dirty()) { event.preventDefault(); event.returnValue = ""; } });
 window.addEventListener("hashchange", () => {
   const view = location.hash.slice(1);
-  if (!["records", "meeting", "activity"].includes(view)) return;
-  if (state.extracting || state.committing) { renderView(state.view); return; }
+  if (!["records", "meeting", "activity", "document", "reconciliation"].includes(view)) return;
+  if (state.extracting || state.committing || supplier.isBusy()) { renderView(state.view); return; }
   guardDraft(() => {
     if (view === "meeting" && state.form?.moduleId !== "meetings") openMeeting();
+    else if (["document", "reconciliation"].includes(view)) openSupplier(view);
     else renderView(view);
   });
 });
 $("record-dialog").addEventListener("cancel", (event) => { if (state.busy) event.preventDefault(); });
-renderView(["records", "meeting", "activity"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "records");
+renderView(["records", "meeting", "activity", "document", "reconciliation"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "records");
 icons();
 const initial = new URLSearchParams(location.search);
 load(initial.get("formId")).then(async () => {
   if (state.view === "meeting" && state.form.moduleId !== "meetings") await openMeeting();
+  if (["document", "reconciliation"].includes(state.view)) await openSupplier(state.view);
   if (initial.get("recordId")) openRecord(initial.get("recordId"));
 }).catch((error) => notice(error.message));

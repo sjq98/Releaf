@@ -1,6 +1,6 @@
 # Releaf User Guide
 
-A local-first, English-language workspace for small business workflows, organized into **Order Management** and **Meeting Follow-up** modules. Create custom tables, manage records, link tables through unique fields, and turn meeting text into reviewable action items.
+A local-first, English-language workspace for small business workflows, organized into **Order Management**, **Meeting Follow-up**, and **Supplier Reconciliation** modules. Create custom tables, manage records, link tables through unique fields, and turn meeting text into reviewable action items. See [Supplier Reconciliation and Spreadsheet Import](supplier-reconciliation.md) for shared Excel/CSV import, document recognition, and quantity comparisons.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ npm.cmd install
 npm.cmd start
 ```
 
-Open `http://127.0.0.1:5173`. Set `PORT` to use another port. The default database is created at `data/forms.sqlite`; set `ORDER_DB` to choose a different path.
+Open `http://127.0.0.1:5174`. On Windows, `start-server.bat` also starts the application on port 5174. Keep local development and verification on this port; if it is occupied, use the running server or stop it before restarting. The default database is created at `data/forms.sqlite`; set `ORDER_DB` to choose a different path.
 
 Use `npm.cmd` in PowerShell to avoid the Windows script-policy restriction on `npm.ps1`. No execution-policy change is needed.
 
@@ -108,7 +108,7 @@ All write requests use `Content-Type: application/json`.
 - `POST /api/ai/models` accepts `providerName`, `baseUrl`, and `apiKey`; returns model IDs discovered from the upstream provider.
 - `PUT /api/ai/config` accepts those credentials plus a selected `model`; verifies the model upstream and saves the settings.
 - `GET /api/forms` lists forms.
-- `POST /api/forms` creates a table. Optional `fields` and `moduleId` (`orders` or `meetings`) may be supplied.
+- `POST /api/forms` creates a table. Optional `fields` and `moduleId` (`orders`, `meetings`, or `suppliers`) may be supplied.
 - `GET /api/forms/{id}` retrieves a form schema.
 - `PUT /api/forms/{id}` updates its name and fields; include the current `version`.
 - `GET /api/forms/{id}/records` lists active records.
@@ -135,7 +135,15 @@ Example record body:
 }
 ```
 
-The API is intended for local development and same-origin browser use. It has no user authentication, authorization, remote access controls, or production deployment hardening; do not expose it to an untrusted network. Cross-origin browser requests are rejected. This is an independent prototype; it is not connected to Orbyte's APIs or authentication.
+These endpoints are the local workspace interface. The server restricts administration to loopback connections and rejects cross-origin browser requests. There is no user login or tenant ownership, so do not expose it to an untrusted network.
+
+## Chat Assistant and External Agents
+
+Use **Assistant** at the bottom right. Its header has independent provider settings and Agent token management. The default **Review first** mode validates changes and displays an approval preview; **Full access** applies future changes without approval after explicit confirmation. The same field constraints and record history apply in both modes.
+
+External integrations should use the separate Bearer-protected `/api/agent/` interface. It supports all custom forms, typed filters/pagination, record CRUD and schema creation/editing. Read the [Assistant and Agent API guide](agent-api.md) for configuration, endpoint details, idempotency, approval semantics, privacy and deployment limitations.
+
+This is an independent prototype; it is not connected to Orbyte's APIs or authentication.
 
 ## Development
 

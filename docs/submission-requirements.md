@@ -28,6 +28,16 @@ Its checklist also requests team/domain/SDG details, slides and demo-video links
 
 Both platform-use sections are explicitly marked **Required**. They share a template covering Domain 1 and Domain 2; no Domain 2 exemption appears there. Evidence must document actual use. Source: organizer's README.
 
+## Repository Preparation Review
+
+The live [organizer's README](https://github.com/michaelzhngg/SDC_Hackathon_Submission_Template/blob/main/README.md) was rechecked on 2026-10-22 before the current code upload. The four PDF filenames above remain unchanged.
+
+The repository README should expose the template's team-information table, resource links, overview, features, stack, structure, architecture, run/test instructions, platform-use disclosures, lessons, improvements, member/role/GitHub table, submission checklist, and license. Unknown team details and missing deliverables must remain explicitly pending.
+
+The sample Python entry point, dependency file, Replit configuration, and RunPod handler should not be copied as nonfunctional placeholders into this Node.js implementation. Document the actual implementation and verified platform usage instead.
+
+This review checks repository preparation only. Pushing code does not provide the missing signed PDFs, prove sponsor usage, establish deployment, or perform the organizer's separate submission step.
+
 ## Preliminary Proposal: Local PDF
 
 The cover states **25 October 2026** as the submission deadline. It gives no cutoff time or timezone. Complete every field and export one PDF named `SDC2026_TeamName_Preliminary.pdf`; incomplete submissions may not be reviewed. Source: preliminary PDF, page 1.

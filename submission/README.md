@@ -1,6 +1,12 @@
 # Submission Preparation
 
-This folder is for the team's final competition documents. This initial code submission is not a complete SDC Hackathon submission.
+This folder is for the team's final competition documents. Uploading the current prototype to GitHub is not a complete SDC Hackathon submission.
+
+## Current Prototype
+
+The 2026-10-22 code update includes custom tables and order history, AI-assisted meeting follow-up, a floating assistant and token-based Agent API, shared XLSX/CSV import, supplier document recognition, and deterministic quantity reconciliation. The Windows launcher and default local server use port 5174. See the root [README](../README.md) for setup and current limitations.
+
+These implementation details support preparation of the proposal and technical declaration; they do not establish live AI accuracy, deployed judge access, Orbyte integration, sponsor-platform usage, or measured SDG impact.
 
 ## Expected PDF Files
 

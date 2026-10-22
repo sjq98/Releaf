@@ -5,6 +5,8 @@ import { dirname } from "node:path";
 import { AppError } from "./errors.js";
 import { FIELD_TYPES, normalizeValues, validateFields } from "./field-types.js";
 import { MODULES, TODO_FIELDS } from "./modules.js";
+import { createAgentRepository } from "./agent-repository.js";
+import { createWorkflowRepository } from "./workflow-repository.js";
 
 export { AppError, FIELD_TYPES };
 export const DEFAULT_FIELDS = [
@@ -80,6 +82,7 @@ export function createStore(filename) {
   if (!db.prepare("PRAGMA table_info(forms)").all().some((column) => column.name === "module_id")) {
     db.exec("ALTER TABLE forms ADD COLUMN module_id TEXT NOT NULL DEFAULT 'orders'");
   }
+  const workflows = createWorkflowRepository(db);
   if (db.prepare("SELECT COUNT(*) AS count FROM forms").get().count === 0) {
     const now = new Date().toISOString();
     db.prepare("INSERT INTO forms (id, name, fields_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
@@ -87,13 +90,32 @@ export function createStore(filename) {
     );
   }
 
+  let transactionDepth = 0;
+  let savepointNumber = 0;
   function transaction(callback) {
-    db.exec("BEGIN IMMEDIATE");
+    const nested = transactionDepth > 0;
+    const point = `nested_${++savepointNumber}`;
+    db.exec(nested ? `SAVEPOINT ${point}` : "BEGIN IMMEDIATE");
+    transactionDepth++;
     try {
       const result = callback();
-      db.exec("COMMIT");
+      db.exec(nested ? `RELEASE ${point}` : "COMMIT");
       return result;
-    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    } catch (error) {
+      db.exec(nested ? `ROLLBACK TO ${point}` : "ROLLBACK");
+      if (nested) db.exec(`RELEASE ${point}`);
+      throw error;
+    } finally { transactionDepth--; }
+  }
+
+  // Run the real mutation and its domain checks, but retain no business-data changes.
+  function preview(callback) {
+    return transaction(() => {
+      const point = `preview_${++savepointNumber}`;
+      db.exec(`SAVEPOINT ${point}`);
+      try { return callback(); }
+      finally { db.exec(`ROLLBACK TO ${point}`); db.exec(`RELEASE ${point}`); }
+    });
   }
 
   function parseForm(row) {
@@ -128,7 +150,8 @@ export function createStore(filename) {
     const source = db.prepare(`SELECT mi.evidence, m.id, m.title, m.meeting_date
       FROM meeting_items mi JOIN meeting_imports m ON m.id = mi.import_id WHERE mi.record_id = ?`).get(row.id);
     return { id: row.id, formId: row.form_id, values: JSON.parse(row.values_json), version: row.version, createdAt: row.created_at, updatedAt: row.updated_at,
-      ...(source ? { source: { importId: source.id, title: source.title, date: source.meeting_date, evidence: source.evidence } } : {}) };
+      ...(source ? { source: { importId: source.id, title: source.title, date: source.meeting_date, evidence: source.evidence } } : {}),
+      ...(workflows.source(row.id) ? { documentSource: workflows.source(row.id) } : {}) };
   }
 
   function getRecord(id) {
@@ -350,7 +373,7 @@ export function createStore(filename) {
     const form = getForm(formId || forms[0].id);
     return { forms, form, records: listRecords(form.id), changes: listChanges(form.id), fieldTypes: FIELD_TYPES, modules: MODULES,
       meetingTableId: db.prepare("SELECT form_id FROM module_tables WHERE module_id = 'meetings'").get()?.form_id || null,
-      references: referenceCatalog(), meetings: listMeetings() };
+      references: referenceCatalog(), meetings: listMeetings(), supplierTables: workflows.tables() };
   }
 
   function listMeetings() {
@@ -406,5 +429,6 @@ export function createStore(filename) {
 
   return { getForm, listForms, createForm, updateForm, listRecords, getRecord, createRecord, updateRecord, deleteRecord, listChanges,
     getAIConfig, saveAIConfig,
+    agent: createAgentRepository(db), workflows, transaction, preview,
     referenceCatalog, ensureMeetingTable, saveExtraction, getExtraction, commitExtraction, bootstrap, close: () => db.close() };
 }
