@@ -1,5 +1,4 @@
 import { AppError } from "./errors.js";
-import { createMeetingAI } from "./meeting-ai.js";
 
 function normalizeURL(value) {
   if (typeof value !== "string" || !value.trim() || value.length > 2048) throw new AppError(400, "Enter a valid API base URL.");
@@ -89,11 +88,6 @@ export function createAIConfig({ store, env = process.env, fetchImpl = fetch, ti
       if (!models.includes(body.model)) throw new AppError(400, "The selected model is no longer available. Reload the provider's model list.");
       store.saveAIConfig({ ...config, model: body.model });
       return publicConfig();
-    },
-    async extract(input) {
-      const config = current();
-      const ai = createMeetingAI({ env: { AI_API_KEY: config.apiKey, AI_MODEL: config.model, AI_BASE_URL: config.baseUrl }, fetchImpl });
-      return ai.extract(input);
     },
   };
 }

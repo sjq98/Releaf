@@ -1,14 +1,43 @@
+import { html, uiText, setUIText, uiAttributes, t, setUIAttribute } from "/i18n.js";
 import { initAISettings } from "/ai-settings.js";
+import { readSpreadsheet } from "/warehouse-import.js";
 
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
-const icon = (name) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+const icon = (name) => html`<i data-lucide="${name}" aria-hidden="true"></i>`;
 const label = (value) => value == null || value === "" ? "(empty)" : typeof value === "boolean" ? value ? "Yes" : "No" : String(value);
 const timestamp = (value) => new Date(value).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 
-export function initAssistant({ api, icons, onChanged }) {
+export function initAssistant({ api, icons, onChanged, getState = () => ({}) }) {
   const $ = (id) => document.getElementById(`assistant-${id}`);
   const panel = $("panel");
   const state = { mode: "review", config: {}, actions: [], session: null, tab: "chat", busy: false, deciding: false };
+  let generation = 0;
+  const active = request => request === generation && Boolean(getState().user);
+  const canManage = () => Boolean(getState().permissions?.manageSettings);
+  let files = [];
+  function renderFiles() {
+    $("files").hidden = !files.length;
+    $("files").innerHTML = files.map(file => html`<span>${icon("file-spreadsheet")}<span>${esc(file.name)}</span><button type="button" class="icon-button" data-remove-chat-file="${file.id}" title="Remove attachment" aria-label="Remove attachment">${icon("x")}</button></span>`).join("");
+    icons();
+  }
+  $("upload").onclick = () => { if (!state.busy) $("file-input").click(); };
+  $("files").onclick = event => {
+    const id = event.target.closest("[data-remove-chat-file]")?.dataset.removeChatFile;
+    if (id && !state.busy) { files = files.filter(file => file.id !== id); renderFiles(); }
+  };
+  $("file-input").onchange = async event => {
+    const chosen = event.target.files[0]; if (!chosen || state.busy) return;
+    const request = generation;
+    setBusy(true); error();
+    try {
+      if (files.length >= 3) throw new Error("Attach up to three spreadsheets per message.");
+      const file = await api("/api/warehouse/files", { method: "POST", body: JSON.stringify({ spaceId: getState().space?.id ?? "default", file: await readSpreadsheet(chosen) }) });
+      if (!active(request)) return;
+      if (!files.some(item => item.id === file.id)) files.push(file);
+      renderFiles();
+    } catch (cause) { if (active(request)) error(cause.message); }
+    finally { event.target.value = ""; if (active(request)) setBusy(false); }
+  };
   let tokenBusy = false;
   let polling = false;
   let actionsRenderKey = "";
@@ -24,13 +53,13 @@ export function initAssistant({ api, icons, onChanged }) {
       if (node.hasAttribute(attr)) node.setAttribute(attr, node.getAttribute(attr).split(" ").map((id) => `assistant-${id}`).join(" "));
     }
   }
-  settings.querySelector("h2").textContent = "Assistant provider";
+  setUIText(settings.querySelector("h2"), "Assistant provider");
   document.body.append(settings);
-  initAISettings({ api, icons, namespace: "assistant-", endpoint: "/api/assistant", triggerSelector: "[data-assistant-settings]",
+  const providerSettings = initAISettings({ api, icons, canManage, namespace: "assistant-", endpoint: "/api/assistant", triggerSelector: "[data-assistant-settings]",
     onSaved(config) { state.config = config; renderHeader(); error(); } });
 
   function error(message = "") {
-    $("error").textContent = message;
+    setUIText($("error"), message);
     $("error").hidden = !message;
   }
   function setBusy(busy) {
@@ -38,13 +67,18 @@ export function initAssistant({ api, icons, onChanged }) {
     $("message").disabled = busy;
     $("send").disabled = busy || !state.session || !state.config.configured;
     $("new").disabled = busy;
+    $("upload").disabled = busy;
     $("working").hidden = !busy;
     $("message-form").setAttribute("aria-busy", String(busy));
     document.querySelectorAll("[data-assistant-mode]").forEach((button) => { button.disabled = busy; });
     renderActions();
   }
   function renderHeader() {
+    document.querySelectorAll("[data-assistant-settings]").forEach(button => { button.hidden = !canManage(); });
+    $("tokens-open").hidden = !getState().user;
+    delete $("provider-status").dataset.i18nText;
     $("provider-status").textContent = state.config.configured ? `${state.config.providerName} · ${state.config.model}` : "Not configured";
+    if (!state.config.configured) setUIText($("provider-status"), "Not configured");
     $("provider-status").title = $("provider-status").textContent;
     document.querySelectorAll("[data-assistant-mode]").forEach((button) => { button.setAttribute("aria-pressed", String(button.dataset.assistantMode === state.mode)); });
     const count = state.actions.filter((action) => action.status === "pending").length;
@@ -52,13 +86,13 @@ export function initAssistant({ api, icons, onChanged }) {
     $("launcher-count").textContent = count;
     $("launcher-count").hidden = !count;
     $("send").disabled = state.busy || !state.session || !state.config.configured;
-    $("message").placeholder = state.config.configured ? "Message Releaf..." : "Configure an assistant provider to chat";
+    setUIAttribute($("message"), "placeholder", state.config.configured ? "Message Releaf..." : "Configure an assistant provider to chat");
   }
   function renderMessages() {
     const messages = state.session?.messages || [];
     $("messages").innerHTML = messages.length ? messages.map((message) =>
-      `<article class="assistant-message assistant-message-${message.role === "user" ? "user" : "bot"}"><span class="assistant-message-label">${message.role === "user" ? "YOU" : "RELEAF"}</span><p>${esc(message.content)}</p></article>`).join("")
-      : `<div class="assistant-empty">${icon("messages-square")}No messages yet</div>`;
+      html`<article class="assistant-message assistant-message-${message.role === "user" ? "user" : "bot"}"><span class="assistant-message-label">${uiText(message.role === "user" ? "YOU" : "RELEAF")}</span><p>${esc(message.content)}</p></article>`).join("")
+      : html`<div class="assistant-empty">${icon("messages-square")}No messages yet</div>`;
     icons();
     $("chat-view").scrollTop = $("chat-view").scrollHeight;
   }
@@ -69,21 +103,28 @@ export function initAssistant({ api, icons, onChanged }) {
     actionsRenderKey = renderKey;
     $("actions-view").innerHTML = actions.length ? actions.map((action) => {
       const preview = action.preview;
-      const diff = preview.diff?.map((item) => `<div class="assistant-diff-row"><span class="assistant-diff-name">${esc(item.name)}</span><div class="assistant-diff-values"><span class="assistant-before">${esc(item.beforeLabel ?? label(item.before))}</span>${icon("arrow-right")}<span class="assistant-after">${esc(item.afterLabel ?? label(item.after))}</span></div></div>`).join("");
-      const schema = preview.after?.fields ? `<div class="assistant-action-note">${preview.after.fields.length} ${preview.after.fields.length === 1 ? "field" : "fields"}${preview.before ? ` · ${preview.affectedRecords} existing records · ${preview.changedRecordCount} records with visible value changes` : ""}</div>
-        ${preview.before?.name !== preview.after.name ? `<div class="assistant-diff-row"><span class="assistant-diff-name">Table name</span><div class="assistant-diff-values"><span class="assistant-before">${esc(preview.before?.name || "(new table)")}</span>${icon("arrow-right")}<span class="assistant-after">${esc(preview.after.name)}</span></div></div>` : ""}
+      const diff = preview.diff?.map((item) => html`<div class="assistant-diff-row"><span class="assistant-diff-name">${esc(item.name)}</span><div class="assistant-diff-values"><span class="assistant-before">${esc(item.beforeLabel ?? label(item.before))}</span>${icon("arrow-right")}<span class="assistant-after">${esc(item.afterLabel ?? label(item.after))}</span></div></div>`).join("");
+      const schema = preview.after?.fields ? html`<div class="assistant-action-note">${uiText(`${preview.after.fields.length} ${preview.after.fields.length === 1 ? "field" : "fields"}`)}${preview.before ? ` · ${uiText(`${preview.affectedRecords} existing records`)} · ${uiText(`${preview.changedRecordCount} records with visible value changes`)}` : ""}</div>
+        ${preview.before?.name !== preview.after.name ? html`<div class="assistant-diff-row"><span class="assistant-diff-name">Table name</span><div class="assistant-diff-values"><span class="assistant-before">${preview.before?.name ? esc(preview.before.name) : uiText("(new table)")}</span>${icon("arrow-right")}<span class="assistant-after">${esc(preview.after.name)}</span></div></div>` : ""}
         <details class="assistant-schema"><summary>Field changes</summary><pre>${esc(JSON.stringify({ before: preview.before?.fields || [], after: preview.after.fields }, null, 2))}</pre></details>
-        ${preview.changedRecordCount ? `<details class="assistant-schema"><summary>Affected visible values (${preview.recordChanges.length} of ${preview.changedRecordCount})</summary><pre>${esc(JSON.stringify(preview.recordChanges, null, 2))}</pre></details>` : ""}` : "";
+        ${preview.changedRecordCount ? html`<details class="assistant-schema"><summary>${uiText(`Affected visible values (${preview.recordChanges.length} of ${preview.changedRecordCount})`)}</summary><pre>${esc(JSON.stringify(preview.recordChanges, null, 2))}</pre></details>` : ""}` : "";
       const resultRecord = action.result?.record;
-      const formId = preview.formId || action.result?.id;
+      const formId = action.operation === "delete_form" ? null : preview.formId || (action.operation === "create_form" ? action.result?.id : null);
       const recordId = resultRecord?.id || (action.operation === "delete_record" ? null : preview.recordId);
-      return `<article class="assistant-action"><h3>${esc(preview.title)}</h3><div class="assistant-action-meta"><span>${esc(action.actorName)} · ${esc(timestamp(action.createdAt))}</span><span class="assistant-action-status ${esc(action.status)}">${esc(action.status)}</span></div>
-        <div class="assistant-diff">${diff || ""}</div>${schema}${preview.noChange ? '<p class="assistant-action-note">No value changes.</p>' : ""}
-        ${action.operation === "delete_record" ? '<p class="assistant-action-note">This record will be removed. Its activity history remains.</p>' : ""}
-        ${action.error ? `<p class="assistant-action-note" role="alert">${esc(action.error)}</p>` : ""}
-        ${action.status === "applied" && formId ? `<a class="assistant-record-link" href="?formId=${encodeURIComponent(formId)}${recordId ? `&recordId=${encodeURIComponent(recordId)}` : ""}#records">Open ${recordId ? "record" : "table"} ${icon("arrow-up-right")}</a>` : ""}
-        ${action.status === "pending" ? `<div class="assistant-action-buttons"><button class="button button-secondary" data-assistant-reject="${action.id}"${state.deciding || state.busy ? " disabled" : ""}>${icon("x")}<span>Reject</span></button><button class="button ${action.operation === "delete_record" ? "button-danger" : "button-primary"}" data-assistant-approve="${action.id}"${state.deciding || state.busy ? " disabled" : ""}>${icon("check")}<span>Approve</span></button></div>` : ""}</article>`;
-    }).join("") : `<div class="assistant-empty">${icon(state.tab === "approvals" ? "shield-check" : "history")}${state.tab === "approvals" ? "No pending approvals" : "No agent activity yet"}</div>`;
+      return html`<article class="assistant-action"><h3>${esc(preview.title)}</h3><div class="assistant-action-meta"><span>${esc(action.actorName)} · ${esc(timestamp(action.createdAt))}</span><span class="assistant-action-status ${esc(action.status)}">${uiText(action.status)}</span></div>
+        <div class="assistant-diff">${diff || ""}</div>${schema}${preview.noChange ? html`<p class="assistant-action-note">No value changes.</p>` : ""}
+        ${preview.changes?.length ? html`<details class="assistant-schema"><summary>${uiText(`All changes, including automations (${preview.changes.length})`)}</summary>${preview.changes.map((change) => {
+          const form = getState().forms?.find((form) => form.id === change.formId);
+          const readable = (values) => values == null ? null : Object.fromEntries(Object.entries(values).map(([id, value]) => [form?.fields.find((field) => field.id === id)?.name ?? id, value]));
+          return html`<h4>${esc(form?.name ?? change.formId)}: ${uiText(change.kind)}</h4><pre>${esc(JSON.stringify({ before: readable(change.before), after: readable(change.after) }, null, 2))}</pre>`;
+        }).join("")}</details>` : ""}
+        ${preview.result ? html`<details class="assistant-schema"><summary>Configuration preview</summary><pre>${esc(JSON.stringify(preview.result, null, 2))}</pre></details>` : ""}
+        ${action.operation === "delete_record" ? html`<p class="assistant-action-note">This record will be removed. Its activity history remains.</p>` : ""}
+        ${preview.deletion ? html`<div class="form-error"><strong>${esc(preview.deletion.name)}</strong><p>${uiText(`${preview.deletion.recordCount} records`)} · ${uiText(`${preview.deletion.notificationRuleCount} notification rules`)}</p><p>This removes the form and all its records from the workspace. Historical data is retained locally.</p></div>` : ""}
+        ${action.error ? html`<p class="assistant-action-note" role="alert">${esc(action.error)}</p>` : ""}
+        ${action.status === "applied" && formId ? html`<a class="assistant-record-link" href="?formId=${encodeURIComponent(formId)}${recordId ? `&recordId=${encodeURIComponent(recordId)}` : ""}#records">${uiText(recordId ? "Open record" : "Open table")} ${icon("arrow-up-right")}</a>` : ""}
+        ${action.status === "pending" ? html`<div class="assistant-action-buttons"><button class="button button-secondary" data-assistant-reject="${action.id}"${state.deciding || state.busy ? " disabled" : ""}>${icon("x")}<span>Reject</span></button><button class="button ${["delete_record", "delete_form"].includes(action.operation) ? "button-danger" : "button-primary"}" data-assistant-approve="${action.id}"${state.deciding || state.busy ? " disabled" : ""}>${icon("check")}<span>${uiText(action.operation === "delete_form" ? "Confirm deletion" : "Approve")}</span></button></div>` : ""}</article>`;
+    }).join("") : html`<div class="assistant-empty">${icon(state.tab === "approvals" ? "shield-check" : "history")}${uiText(state.tab === "approvals" ? "No pending approvals" : "No agent activity yet")}</div>`;
     icons();
   }
   function tab(name) {
@@ -98,40 +139,53 @@ export function initAssistant({ api, icons, onChanged }) {
     renderActions();
   }
   async function refreshState() {
+    const request = generation;
     const data = await api("/api/assistant/state");
+    if (!active(request)) return;
     state.mode = data.mode;
-    state.config = data.config;
-    state.actions = data.actions;
+    state.config = data.config ?? {};
+    state.actions = data.actions ?? [];
     renderHeader();
     renderActions();
   }
   async function newSession() {
-    state.session = await api("/api/assistant/sessions", { method: "POST", body: "{}" });
+    const request = generation;
+    files = []; renderFiles();
+    const session = await api("/api/assistant/sessions", { method: "POST", body: "{}" });
+    if (!active(request)) return;
+    state.session = session;
     sessionId = state.session.id;
     try { localStorage.setItem("releaf-assistant-session", sessionId); } catch { /* Optional browser persistence. */ }
     renderMessages();
     renderHeader();
   }
   async function loadSession() {
+    const request = generation;
     if (sessionId) {
-      try { state.session = await api(`/api/assistant/sessions/${sessionId}`); renderMessages(); return; }
-      catch (cause) { if (cause.status !== 404) throw cause; }
+      try {
+        const session = await api(`/api/assistant/sessions/${sessionId}`);
+        if (!active(request)) return;
+        state.session = session; renderMessages(); return;
+      } catch (cause) { if (!active(request)) return; if (![403, 404].includes(cause.status)) throw cause; }
     }
+    if (!active(request)) return;
     await newSession();
   }
   async function open() {
+    if (!getState().user) return;
+    const request = generation;
     lastFocus = document.activeElement;
     panel.hidden = false;
     $("launcher").hidden = true;
     $("launcher").setAttribute("aria-expanded", "true");
     error();
-    try { await refreshState(); if (!state.session) await loadSession(); renderHeader(); }
-    catch (cause) { error(cause.message); }
-    $("message").focus();
+    try { await refreshState(); if (!active(request)) return; if (!state.session) await loadSession(); if (active(request)) renderHeader(); }
+    catch (cause) { if (active(request)) error(cause.message); }
+    if (active(request)) $("message").focus();
   }
   function close() {
     panel.hidden = true;
-    $("launcher").hidden = false;
+    $("launcher").hidden = !getState().user;
     $("launcher").setAttribute("aria-expanded", "false");
     (lastFocus || $("launcher")).focus();
   }
@@ -139,18 +193,19 @@ export function initAssistant({ api, icons, onChanged }) {
   $("close").addEventListener("click", close);
   panel.addEventListener("keydown", (event) => { if (event.key === "Escape") { close(); event.stopPropagation(); } });
   $("new").addEventListener("click", async () => {
-    try { await newSession(); tab("chat"); error(); $("message").focus(); }
-    catch (cause) { error(cause.message); }
+    const request = generation;
+    try { await newSession(); if (!active(request)) return; tab("chat"); error(); $("message").focus(); }
+    catch (cause) { if (active(request)) error(cause.message); }
   });
-  $("refresh").addEventListener("click", () => refreshState().catch((cause) => error(cause.message)));
+  $("refresh").addEventListener("click", () => { const request = generation; refreshState().catch((cause) => { if (active(request)) error(cause.message); }); });
   document.querySelectorAll("[data-assistant-tab]").forEach((button) => button.addEventListener("click", () => tab(button.dataset.assistantTab)));
 
   function confirm({ title = "Enable full access?", copy = "Changes can be saved and records deleted without approval. Field validation and activity history remain active.", accept = "Enable full access" } = {}) {
     return new Promise((resolve) => {
       const dialog = $("confirm-dialog");
-      $("confirm-title").textContent = title;
-      $("confirm-copy").textContent = copy;
-      $("confirm-accept").querySelector("span").textContent = accept;
+      setUIText($("confirm-title"), title);
+      setUIText($("confirm-copy"), copy);
+      setUIText($("confirm-accept").querySelector("span"), accept);
       dialog.returnValue = "";
       dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirmed"), { once: true });
       dialog.showModal();
@@ -160,53 +215,71 @@ export function initAssistant({ api, icons, onChanged }) {
   $("confirm-cancel").addEventListener("click", () => $("confirm-dialog").close());
   $("confirm-accept").addEventListener("click", () => $("confirm-dialog").close("confirmed"));
   document.querySelectorAll("[data-assistant-mode]").forEach((button) => button.addEventListener("click", async () => {
+    const request = generation;
     const mode = button.dataset.assistantMode;
     if (state.busy || mode === state.mode || (mode === "full" && !await confirm())) return;
+    if (!active(request)) return;
     try {
       await api("/api/assistant/mode", { method: "PUT", body: JSON.stringify({ mode, confirmFullAccess: mode === "full" }) });
-      await refreshState(); error();
-    } catch (cause) { error(cause.message); }
+      if (!active(request)) return;
+      await refreshState(); if (active(request)) error();
+    } catch (cause) { if (active(request)) error(cause.message); }
   }));
   $("message-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = $("message").value.trim();
     if (!text || state.busy || !state.session) return;
+    const request = generation;
     setBusy(true); error();
     const before = new Set(state.actions.map((action) => action.id));
     state.session.messages.push({ role: "user", content: text });
     renderMessages();
     try {
-      const result = await api(`/api/assistant/sessions/${state.session.id}/messages`, { method: "POST", body: JSON.stringify({ text }) });
+      const result = await api(`/api/assistant/sessions/${state.session.id}/messages`, { method: "POST", body: JSON.stringify({ text, fileIds: files.map(file => file.id), spaceId: getState().space?.id ?? "default" }) });
+      if (!active(request)) return;
       state.session = result;
       $("message").value = "";
+      files = []; renderFiles();
       renderMessages();
       await refreshState();
+      if (!active(request)) return;
       if (result.changed) await onChanged();
+      if (!active(request)) return;
       if (result.actions.some((action) => action.status === "pending" && !before.has(action.id))) tab("approvals");
     } catch (cause) {
+      if (!active(request)) return;
       error(cause.message);
-      try { await loadSession(); await refreshState(); await onChanged(); } catch { /* Keep the original error visible. */ }
-    } finally { setBusy(false); if (state.tab === "chat") $("message").focus(); }
+      try {
+        await loadSession();
+        if (!active(request)) return;
+        await refreshState();
+        if (active(request)) await onChanged();
+      } catch { /* Keep the original error visible. */ }
+    } finally { if (active(request)) { setBusy(false); if (state.tab === "chat") $("message").focus(); } }
   });
   $("actions-view").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-assistant-approve],[data-assistant-reject]");
     if (!button || state.deciding || state.busy) return;
+    const request = generation;
     const id = button.dataset.assistantApprove || button.dataset.assistantReject;
     const decision = button.dataset.assistantApprove ? "approve" : "reject";
     state.deciding = true; renderActions(); error();
     try {
       await api(`/api/assistant/actions/${id}/${decision}`, { method: "POST", body: "{}" });
+      if (!active(request)) return;
       if (decision === "approve") await onChanged();
-    } catch (cause) { error(cause.message); }
-    finally { state.deciding = false; await refreshState().catch((cause) => error(cause.message)); }
+    } catch (cause) { if (active(request)) error(cause.message); }
+    finally { if (active(request)) { state.deciding = false; await refreshState().catch((cause) => { if (active(request)) error(cause.message); }); } }
   });
 
-  function tokenError(message = "") { $("token-error").textContent = message; $("token-error").hidden = !message; }
+  function tokenError(message = "") { setUIText($("token-error"), message); $("token-error").hidden = !message; }
   async function renderTokens() {
+    const request = generation;
     const tokens = await api("/api/assistant/tokens");
-    $("token-list").innerHTML = tokens.length ? tokens.map((token) => `<div class="assistant-token-row"><div><strong>${esc(token.name)}</strong><code>${esc(token.prefix)}...</code>${token.revokedAt ? '<span class="label-note"> · Revoked</span>' : ""}</div>
+    if (!active(request)) return;
+    $("token-list").innerHTML = tokens.length ? tokens.map((token) => html`<div class="assistant-token-row"><div><strong>${esc(token.name)}</strong><code>${esc(token.prefix)}...</code>${token.revokedAt ? html`<span class="label-note"> · Revoked</span>` : ""}</div>
       <div class="assistant-token-controls"><select class="standalone-input" data-token-mode="${token.id}" aria-label="${esc(token.name)} access"${token.revokedAt ? " disabled" : ""}><option value="review"${token.mode === "review" ? " selected" : ""}>Review first</option><option value="full"${token.mode === "full" ? " selected" : ""}>Full access</option></select><button class="icon-button action-delete" data-token-revoke="${token.id}" title="Revoke token" aria-label="Revoke ${esc(token.name)}"${token.revokedAt ? " disabled" : ""}>${icon("trash-2")}</button></div></div>`).join("")
-      : '<p class="assistant-action-note">No access tokens</p>';
+      : html`<p class="assistant-action-note">No access tokens</p>`;
     icons();
   }
   function tokenWorking(busy) {
@@ -221,8 +294,10 @@ export function initAssistant({ api, icons, onChanged }) {
     });
   }
   $("tokens-open").addEventListener("click", async () => {
+    if (!getState().user) return;
+    const request = generation;
     $("token-dialog").showModal(); tokenError();
-    try { await renderTokens(); } catch (cause) { tokenError(cause.message); }
+    try { await renderTokens(); } catch (cause) { if (active(request)) tokenError(cause.message); }
   });
   $("tokens-close").addEventListener("click", () => { if (!tokenBusy) $("token-dialog").close(); });
   $("token-dialog").addEventListener("cancel", (event) => { if (tokenBusy) event.preventDefault(); });
@@ -230,48 +305,69 @@ export function initAssistant({ api, icons, onChanged }) {
   $("token-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     if (tokenBusy) return;
+    const request = generation;
     const mode = $("token-mode").value;
     if (mode === "full" && !await confirm()) return;
+    if (!active(request)) return;
     tokenWorking(true); tokenError();
     try {
-      const result = await api("/api/assistant/tokens", { method: "POST", body: JSON.stringify({ name: $("token-name").value, mode, confirmFullAccess: mode === "full" }) });
+      const result = await api("/api/assistant/tokens", { method: "POST", body: JSON.stringify({ name: $("token-name").value, mode, spaceId: getState().space?.id ?? "default", confirmFullAccess: mode === "full" }) });
+      if (!active(request)) return;
       $("created-token").value = result.token;
       $("token-secret").hidden = false;
       $("token-form").reset();
       await renderTokens();
-    } catch (cause) { tokenError(cause.message); }
-    finally { tokenWorking(false); }
+    } catch (cause) { if (active(request)) tokenError(cause.message); }
+    finally { if (active(request)) tokenWorking(false); }
   });
   $("copy-token").addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText($("created-token").value); $("copy-token").title = "Copied"; }
+    try { await navigator.clipboard.writeText($("created-token").value); setUIAttribute($("copy-token"), "title", "Copied"); }
     catch { $("created-token").focus(); $("created-token").select(); }
   });
   $("token-list").addEventListener("change", async (event) => {
     const input = event.target.closest("[data-token-mode]");
     if (!input || tokenBusy) return;
+    const request = generation;
     const mode = input.value;
     if (mode === "full" && !await confirm()) { await renderTokens(); return; }
+    if (!active(request)) return;
     tokenWorking(true); tokenError();
     try {
       await api(`/api/assistant/tokens/${input.dataset.tokenMode}`, { method: "PATCH", body: JSON.stringify({ mode, confirmFullAccess: mode === "full" }) });
-    } catch (cause) { tokenError(cause.message); }
-    finally { tokenWorking(false); await renderTokens().catch((cause) => tokenError(cause.message)); }
+    } catch (cause) { if (active(request)) tokenError(cause.message); }
+    finally { if (active(request)) { tokenWorking(false); await renderTokens().catch((cause) => { if (active(request)) tokenError(cause.message); }); } }
   });
   $("token-list").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-token-revoke]");
     if (!button || tokenBusy) return;
+    const request = generation;
     if (!await confirm({ title: "Revoke this token?", copy: "The agent will lose access. Its pending changes will be rejected.", accept: "Revoke token" })) return;
+    if (!active(request)) return;
     tokenWorking(true); tokenError();
-    try { await api(`/api/assistant/tokens/${button.dataset.tokenRevoke}`, { method: "DELETE" }); await refreshState(); }
-    catch (cause) { tokenError(cause.message); }
-    finally { tokenWorking(false); await renderTokens().catch((cause) => tokenError(cause.message)); }
+    try { await api(`/api/assistant/tokens/${button.dataset.tokenRevoke}`, { method: "DELETE" }); if (active(request)) await refreshState(); }
+    catch (cause) { if (active(request)) tokenError(cause.message); }
+    finally { if (active(request)) { tokenWorking(false); await renderTokens().catch((cause) => { if (active(request)) tokenError(cause.message); }); } }
   });
   setInterval(async () => {
     if (panel.hidden || state.busy || state.deciding || polling || document.hidden) return;
+    const request = generation;
     polling = true;
-    try { await refreshState(); } catch (cause) { error(cause.message); }
-    finally { polling = false; }
+    try { await refreshState(); } catch (cause) { if (active(request)) error(cause.message); }
+    finally { if (active(request)) polling = false; }
   }, 15000);
+  function reset() {
+    generation++;
+    state.mode = "review"; state.config = {}; state.actions = []; state.session = null; state.deciding = false;
+    files = []; sessionId = null; polling = false; actionsRenderKey = ""; lastFocus = null;
+    try { localStorage.removeItem("releaf-assistant-session"); } catch { /* Optional browser persistence. */ }
+    providerSettings.reset();
+    tokenWorking(false); $("token-form").reset(); $("token-list").replaceChildren();
+    $("created-token").value = ""; $("token-secret").hidden = true; tokenError(); error();
+    $("message").value = ""; $("file-input").value = "";
+    for (const modal of [$("token-dialog"), $("confirm-dialog")]) if (modal.open) modal.close();
+    panel.hidden = true; $("launcher").hidden = true; $("launcher").setAttribute("aria-expanded", "false");
+    renderFiles(); renderMessages(); setBusy(false); tab("chat"); renderHeader();
+  }
   icons();
-  return { open };
+  return { open, reset };
 }

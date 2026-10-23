@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Releaf: custom SME business tables, order change history and AI-assisted meeting follow-up.",
+  "description": "Releaf: agent-assisted warehouse workflows and custom SME business forms.",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -21,6 +21,7 @@
     "csv-parse": "7.0.3",
     "decimal.js": "10.6.0",
     "exceljs": "4.4.0",
+    "jsep": "1.4.0",
     "lucide": "1.60.0",
     "pdfjs-dist": "6.4.299"
   }

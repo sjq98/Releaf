@@ -1,4 +1,5 @@
 import test from "node:test";
+import { setupAdmin } from "./helpers/http-auth.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -104,24 +105,24 @@ test("upstream model errors are actionable and do not disclose credentials or re
   await assert.rejects(config.models(settings), /timed out/);
 });
 
-test("HTTP AI settings stay private, reject cross-origin writes, and drive meeting extraction immediately", async (t) => {
+test("HTTP AI settings stay private, reject cross-origin writes, and drive configurable AI tasks immediately", async (t) => {
   const observed = [];
   const app = createApp({ database: ":memory:", env: {}, aiFetch: async (url, options) => {
     observed.push({ url, options });
     if (url.endsWith("/models")) return response();
     const body = JSON.parse(options.body);
-    const schema = body.response_format.json_schema.schema.properties.items.items.properties.values.properties;
-    assert.ok(schema.task);
+    const schema = body.response_format.json_schema.schema.properties.items.items.properties;
+    assert.ok(schema.result);
     return response({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ items: [{
-      values: { task: "Send report", owner: "Alex", dueDate: null, status: "Open", acceptance: null, relatedOrder: null },
-      evidence: "Alex will send the report.",
+      result: "Send report",
     }] }) } }] });
   } });
   await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   t.after(async () => { await new Promise((resolve) => app.server.close(resolve)); app.store.close(); });
   const base = `http://127.0.0.1:${app.server.address().port}`;
+  const { cookie } = await setupAdmin(base);
   const request = (path, method = "GET", body) => fetch(base + path, {
-    method, headers: body ? { "Content-Type": "application/json" } : {},
+    method, headers: { Cookie: cookie, ...(body ? { "Content-Type": "application/json" } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   assert.equal((await (await request("/api/ai/config")).json()).configured, false);
@@ -133,11 +134,15 @@ test("HTTP AI settings stay private, reject cross-origin writes, and drive meeti
   assert.ok(!JSON.stringify(boot).includes(settings.apiKey));
   assert.ok(!(await (await request("/api/ai/config")).text()).includes(settings.apiKey));
   assert.equal((await fetch(base + "/api/ai/config", { method: "PUT", headers: { "Content-Type": "application/json", Origin: "https://external.example" }, body: JSON.stringify(settings) })).status, 403);
-  const form = await (await request("/api/meetings/table", "POST", {})).json();
-  const extraction = await request("/api/meetings/extract", "POST", {
-    formId: form.id, title: "Follow-up", date: "2026-10-21", text: "Alex will send the report.",
-  });
-  assert.equal(extraction.status, 200);
+  const form = app.store.listForms()[0];
+  const target = app.store.createForm({ name: "Processed", fields: [{ id: "result", name: "Result", type: "text", required: false, unique: false }] });
+  const record = app.store.createRecord(form.id, { schemaVersion: 1, values: { name: "Alex will send the report." } }).record;
+  const task = app.store.tasks.save({ name: "Extract", formId: form.id, inputFields: ["name"], outputFormId: target.id,
+    outputFields: ["result"], instructions: "Extract action", mode: "review", action: "create" });
+  const run = app.store.tasks.enqueue(task.id, { recordId: record.id });
+  const extraction = await app.store.tasks.process(run.id);
+  assert.equal(extraction.status, "Needs review");
+  assert.equal(app.store.listRecords(target.id).length, 0);
   const call = observed.find((call) => call.url.endsWith("/chat/completions"));
   assert.equal(call.url, "https://provider.example/v1/chat/completions");
   assert.equal(call.options.headers.Authorization, `Bearer ${settings.apiKey}`);

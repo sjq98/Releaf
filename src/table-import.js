@@ -72,7 +72,7 @@ function convertCell(value, field, store, referenceCache) {
 }
 
 export function createTableImport(store) {
-  const repo = store.workflows;
+  const repo = store.imports;
   function prepare(body) {
     if (!Array.isArray(body?.rows) || !body.rows.length || body.rows.length > 1000 ||
         body.rows.some((row) => !Array.isArray(row) || row.length > 40 ||
@@ -80,40 +80,44 @@ export function createTableImport(store) {
             typeof cell === "string" && cell.length > 5000))) throw new AppError(400, "Import 1-1,000 rows with up to 40 columns and 5,000 characters per cell.");
     const existing = Boolean(body.formId);
     const fields = existing ? store.getForm(body.formId).fields : validateFields(body.fields);
-    const form = existing ? store.getForm(body.formId) : { name: body.name, moduleId: body.moduleId, fields };
+    const form = existing ? store.getForm(body.formId) : { name: body.name, moduleId: body.moduleId, spaceId: body.spaceId ?? "default", parentId: body.parentId, fields };
     if (existing && body.schemaVersion !== form.version) throw new AppError(409, "The target table changed. Reload the import.");
     if (!body.mapping || typeof body.mapping !== "object" || Array.isArray(body.mapping) ||
-        Object.entries(body.mapping).some(([id, col]) => !fields.some((field) => field.id === id) || !Number.isInteger(col) || col < 0 || col > 39)) {
+        Object.entries(body.mapping).some(([id, col]) => !fields.some((field) => field.id === id && !field.formula) || !Number.isInteger(col) || col < 0 || col > 39)) {
       throw new AppError(400, "Choose valid column mappings.");
     }
     const referenceCache = new Map();
     const rows = body.rows.map((row) => {
       const values = {}, errors = {};
       for (const field of fields) {
+        if (field.formula) continue;
         try { values[field.id] = convertCell(Object.hasOwn(body.mapping, field.id) ? row[body.mapping[field.id]] : null, field, store, referenceCache); }
         catch (error) { errors[field.id] = error.message; }
       }
       return { values, errors };
     });
-    const key = fingerprint({ target: existing ? form.id : { name: form.name, moduleId: form.moduleId, fields }, rows: rows.map((row) => row.values) });
+    const key = fingerprint({ target: existing ? form.id : { name: form.name, moduleId: form.moduleId, spaceId: form.spaceId, fields }, rows: rows.map((row) => row.values) });
     if (repo.duplicate("table", key)) throw new AppError(409, "These rows have already been imported into this table. No records were added.");
     const errors = [];
-    store.preview(() => {
+    const dependencyFingerprint = store.automation.fingerprint(form.spaceId);
+    const effects = store.preview(() => {
       const target = existing ? form : store.createForm(form);
       rows.forEach((row, index) => {
         if (Object.keys(row.errors).length) { errors.push({ row: index + 1, fields: row.errors }); return; }
         try { store.createRecord(target.id, { schemaVersion: target.version, values: row.values }); }
         catch (error) { errors.push({ row: index + 1, fields: error.fields, message: error.message }); }
       });
+      return store.automation.changes();
     });
     return { existing, form, rows: rows.map((row) => row.values), errors, fingerprint: key,
+      effects, dependencyFingerprint,
       fileName: typeof body.fileName === "string" ? body.fileName.slice(0, 180) : "", sheetName: typeof body.sheetName === "string" ? body.sheetName.slice(0, 80) : "" };
   }
   return {
     preview(body) {
       const draft = prepare(body);
       const saved = repo.saveDraft("table", draft, draft.fingerprint);
-      return { id: saved.id, form: draft.form, rows: draft.rows, errors: draft.errors, validCount: draft.rows.length - draft.errors.length };
+      return { id: saved.id, form: draft.form, rows: draft.rows, errors: draft.errors, effects: draft.effects, validCount: draft.rows.length - draft.errors.length };
     },
     commit(id) {
       return store.transaction(() => {
@@ -122,6 +126,7 @@ export function createTableImport(store) {
         const data = draft.payload;
         if (data.errors.length) throw new AppError(400, "Correct all row errors and preview the import again.");
         if (repo.duplicate("table", draft.fingerprint)) throw new AppError(409, "These rows have already been imported.");
+        if (data.dependencyFingerprint && store.automation.fingerprint(data.form.spaceId ?? "default") !== data.dependencyFingerprint) throw new AppError(409, "The target schema, automation rules, or related records changed. Preview the import again.");
         const form = data.existing ? store.getForm(data.form.id) : store.createForm(data.form);
         if (data.existing && form.version !== data.form.version) throw new AppError(409, "The target schema changed. Preview the import again.");
         const recordIds = data.rows.map((values) => store.createRecord(form.id, { schemaVersion: form.version, values }).record.id);

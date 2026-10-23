@@ -9,6 +9,7 @@ export const FIELD_DEFINITIONS = {
   select: { label: "Dropdown", icon: "list" },
   checkbox: { label: "Checkbox", icon: "square-check" },
   reference: { label: "Reference", icon: "link-2" },
+  attachment: { label: "Attachment", icon: "paperclip" },
 };
 export const FIELD_TYPES = Object.keys(FIELD_DEFINITIONS);
 
@@ -38,6 +39,12 @@ export function validateFields(input) {
       if (new Set(options.map((option) => option.toLowerCase())).size !== options.length) fail(`"${name}" has duplicate options.`);
     }
     const result = { id: field.id, name, type: field.type, required: field.required, unique: field.unique, options };
+    if (field.formula != null) {
+      if (field.type !== "number" || typeof field.formula.expression !== "string" ||
+          !field.formula.bindings || typeof field.formula.bindings !== "object" || Array.isArray(field.formula.bindings)) fail("Only number fields support a valid formula.");
+      result.formula = structuredClone(field.formula);
+    }
+    if (field.type === "attachment" && field.unique) fail("Attachment fields cannot be unique.");
     if (field.type === "reference") {
       if (!field.reference || typeof field.reference.formId !== "string" || !field.reference.formId ||
         typeof field.reference.fieldId !== "string" || !field.reference.fieldId) fail(`Choose a target table and unique field for "${name}".`);
@@ -58,7 +65,10 @@ export function validDate(value, withTime = false) {
 
 export function normalizeField(field, input) {
   if (field.type === "checkbox") {
-    if (input === null || input === undefined || input === "") input = false;
+    if (input === null || input === undefined || input === "") {
+      if (!field.required) return null;
+      input = false;
+    }
     if (typeof input !== "boolean") throw new Error("Enter a true or false value.");
     if (field.required && input !== true) throw new Error(`${field.name} must be checked.`);
     return input;
@@ -82,6 +92,12 @@ export function normalizeField(field, input) {
     if (typeof input !== "string" || !field.options.includes(input)) throw new Error("Select one of the available options.");
   } else if (field.type === "reference") {
     if (typeof input !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(input)) throw new Error("Select a record from the referenced table.");
+  } else if (field.type === "attachment") {
+    if (!Array.isArray(input) || input.length > 10 || input.some((id) => typeof id !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(id))) throw new Error("Choose up to 10 uploaded files.");
+    if (!input.length) {
+      if (field.required) throw new Error(`${field.name} is required.`);
+      return null;
+    }
   }
   return input;
 }
@@ -94,8 +110,13 @@ export function normalizeValues(input, fields, previous = {}, creating = false) 
   const errors = Object.create(null);
   for (const field of fields) {
     try {
+      if (field.formula) {
+        if (Object.hasOwn(input, field.id) && input[field.id] != null) throw new Error("This field is calculated automatically.");
+        values[field.id] = previous[field.id] ?? null;
+        continue;
+      }
       const previousValue = Object.hasOwn(previous, field.id) ? previous[field.id] : null;
-      const value = Object.hasOwn(input, field.id) ? input[field.id] : (previousValue ?? (creating && field.type === "checkbox" ? false : null));
+      const value = Object.hasOwn(input, field.id) ? input[field.id] : Object.hasOwn(previous, field.id) ? previousValue : field.type === "checkbox" ? false : null;
       values[field.id] = normalizeField(field, value);
     } catch (error) { errors[field.id] = error.message; }
   }
@@ -106,6 +127,7 @@ export function normalizeValues(input, fields, previous = {}, creating = false) 
 export function displayValue(field, value) {
   if (value === null || value === undefined || value === "") return "Not set";
   if (field.type === "checkbox") return value ? "Yes" : "No";
+  if (field.type === "attachment") return `${value.length} file${value.length === 1 ? "" : "s"}`;
   if (field.type === "number") return new Intl.NumberFormat("en-GB", { maximumFractionDigits: 12 }).format(value);
   if (field.type === "date" || field.type === "datetime") {
     const [date, time] = String(value).split("T");
@@ -116,7 +138,8 @@ export function displayValue(field, value) {
 }
 
 export function inputValue(field, input) {
-  if (field.type === "checkbox") return input.checked;
+  if (field.type === "checkbox") return input.tagName === "SELECT" ? input.value === "" ? null : input.value === "true" : input.checked;
+  if (field.type === "attachment") return JSON.parse(input.dataset.files || "[]");
   if (field.type === "number") return input.value === "" ? null : Number(input.value);
   return input.value || null;
 }

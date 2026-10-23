@@ -23,11 +23,11 @@ const errorStatus = (status, fieldId) => (error) => {
   return true;
 };
 
-test("starts with an empty Orders template and supported field types", (t) => {
+test("starts with a generic form without legacy business templates", (t) => {
   const store = fixture(t);
   const data = store.bootstrap();
   assert.equal(data.forms.length, 1);
-  assert.equal(data.form.name, "Orders");
+  assert.equal(data.form.name, "New form");
   assert.deepEqual(data.form.fields, DEFAULT_FIELDS);
   assert.deepEqual(data.fieldTypes, FIELD_TYPES);
   assert.deepEqual(data.records, []);
@@ -128,7 +128,11 @@ test("uniqueness applies to numeric zero and boolean false", (t) => {
 
 test("records field-level before/after differences automatically", (t) => {
   const store = fixture(t);
-  const form = store.bootstrap().form;
+  const form = store.createForm({ name: "Requests", fields: [
+    field("orderNumber", "text", { unique: true }),
+    field("quantity", "number", { name: "Quantity" }),
+    field("completed", "select", { name: "Completed", options: ["Yes", "No"] }),
+  ] });
   const record = create(store, form, { orderNumber: "ORD-001", quantity: 1, completed: "No" });
   const result = edit(store, form, record, { quantity: 5, completed: "Yes" });
   assert.equal(result.changed, true);

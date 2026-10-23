@@ -10,17 +10,18 @@ async function fixture(t) {
     app.store.close();
   });
   const base = `http://127.0.0.1:${app.server.address().port}`;
+  const { sessionToken } = app.store.auth.setup({ username: "server-test-admin", password: "test-admin-password" });
   const request = (path, method = "GET", body) => fetch(`${base}${path}`, {
-    method, headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    method, headers: { Cookie: `releaf_session=${sessionToken}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  return { app, base, request };
+  return { app, base, request, sessionToken };
 }
 
 test("HTTP API supports form creation, schema editing and record CRUD with history", async (t) => {
   const { request } = await fixture(t);
   const boot = await (await request("/api/bootstrap")).json();
-  assert.equal(boot.form.name, "Orders");
+  assert.equal(boot.form.name, "New form");
   let response = await request("/api/forms", "POST", { name: "Suppliers" });
   assert.equal(response.status, 201);
   let form = await response.json();
@@ -51,26 +52,25 @@ test("HTTP validation errors expose English messages and field errors", async (t
   assert.equal(response.status, 400);
   const error = await response.json();
   assert.ok(error.error.includes("highlighted"));
-  assert.ok(error.fields.orderNumber);
-  assert.ok(error.fields.completed);
+  assert.ok(error.fields.name);
 });
 
 test("rejects malformed JSON, invalid bodies, content types and oversized requests", async (t) => {
-  const { base } = await fixture(t);
+  const { base, sessionToken } = await fixture(t);
   for (const body of ["{", "null", "[]", "123"]) {
-    const response = await fetch(`${base}/api/forms`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    const response = await fetch(`${base}/api/forms`, { method: "POST", headers: { Cookie: `releaf_session=${sessionToken}`, "Content-Type": "application/json" }, body });
     assert.equal(response.status, 400);
   }
-  assert.equal((await fetch(`${base}/api/forms`, { method: "POST", body: "{}" })).status, 415);
+  assert.equal((await fetch(`${base}/api/forms`, { method: "POST", headers: { Cookie: `releaf_session=${sessionToken}` }, body: "{}" })).status, 415);
   assert.equal((await fetch(`${base}/api/forms`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "x".repeat(270000) }),
+    method: "POST", headers: { Cookie: `releaf_session=${sessionToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ name: "x".repeat(270000) }),
   })).status, 413);
 });
 
 test("blocks cross-origin API requests and allows the local origin", async (t) => {
-  const { base } = await fixture(t);
-  assert.equal((await fetch(`${base}/api/bootstrap`, { headers: { Origin: "https://external.example" } })).status, 403);
-  assert.equal((await fetch(`${base}/api/bootstrap`, { headers: { Origin: base } })).status, 200);
+  const { base, sessionToken } = await fixture(t);
+  assert.equal((await fetch(`${base}/api/bootstrap`, { headers: { Cookie: `releaf_session=${sessionToken}`, Origin: "https://external.example" } })).status, 403);
+  assert.equal((await fetch(`${base}/api/bootstrap`, { headers: { Cookie: `releaf_session=${sessionToken}`, Origin: base } })).status, 200);
 });
 
 test("serves English UI, local icons and security headers without exposing source or data", async (t) => {

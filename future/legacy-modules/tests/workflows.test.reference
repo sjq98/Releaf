@@ -1,3 +1,4 @@
+// Historical supplier workflow tests; current spreadsheet tests live in tests/table-import.test.js.
 import test from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
@@ -28,7 +29,7 @@ const file = (name, data) => ({ name, data: Buffer.from(data).toString("base64")
 const image = file("delivery.png", Buffer.from("89504e470d0a1a0a0000", "hex"));
 const page = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
 const recognition = (form, orderId) => ({
-  items: [{ values: Object.fromEntries(form.fields.filter((field) => field.id !== "lineId").map((field) => [field.id, {
+  items: [{ values: Object.fromEntries(form.fields.filter((field) => field.id !== "lineId" && !field.formula && field.type !== "attachment").map((field) => [field.id, {
     documentNumber: "DO-AI", documentType: "Delivery note", documentDate: "2026-10-22", relatedOrder: orderId, supplier: "Acme",
     itemCode: "SKU-01", quantity: 10, unit: "pcs",
   }[field.id] ?? null])), evidence: "SKU-01 10 pcs", page: 1 }],
@@ -252,6 +253,32 @@ test("document adapter sends image pages, controlled schema and server-only cred
   }
   const missing = createSupplierService({ store, aiConfig: { credentials: () => ({}) } });
   await assert.rejects(missing.extract({ file: image, images: [page] }), { status: 503 });
+});
+
+test("document recognition excludes computed fields and attachment IDs while approved writes recalculate", async (t) => {
+  const { store, order, forms } = fixture(t);
+  const form = store.updateForm(forms.documents.id, { ...forms.documents, fields: [...forms.documents.fields,
+    field("files", "attachment"), field("total", "number", {
+      formula: { expression: "q * COALESCE(p, 0)", bindings: { q: { scope: "record", fieldId: "quantity" }, p: { scope: "record", fieldId: "unitPrice" } } },
+    }),
+  ] });
+  let sent;
+  const service = createSupplierService({
+    store, aiConfig: { credentials: () => ({ apiKey: "test-only-key", baseUrl: "https://example.invalid", model: "test-model" }) },
+    fetchImpl: async (_url, options) => {
+      sent = JSON.parse(options.body);
+      const result = recognition(form, order.id);
+      result.items[0].values.unitPrice = 2;
+      return { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(result) } }] }) };
+    },
+  });
+  const draft = await service.extract({ file: image, images: [page] });
+  const properties = sent.response_format.json_schema.schema.properties.items.items.properties.values.properties;
+  assert.equal(Object.hasOwn(properties, "total"), false);
+  assert.equal(Object.hasOwn(properties, "files"), false);
+  assert.equal(JSON.parse(sent.messages[1].content[0].text).fields.some((field) => field.id === "total" || field.id === "files"), false);
+  const result = service.commitDocument(draft.id, { items: [{ index: 0, values: draft.items[0].values }] });
+  assert.equal(store.getRecord(result.recordIds[0]).values.total, 20);
 });
 
 test("document confirmation validates required fields and duplicate supplier document numbers", async (t) => {

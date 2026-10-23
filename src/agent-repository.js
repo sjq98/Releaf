@@ -18,14 +18,22 @@ export function createAgentRepository(db) {
       id TEXT PRIMARY KEY, messages_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
   `);
+  if (!db.prepare("PRAGMA table_info(agent_tokens)").all().some((column) => column.name === "space_id")) {
+    db.exec("ALTER TABLE agent_tokens ADD COLUMN space_id TEXT NOT NULL DEFAULT 'default'");
+  }
+  for (const table of ["agent_tokens", "agent_actions", "assistant_sessions"]) {
+    if (!db.prepare(`PRAGMA table_info(${table})`).all().some(column => column.name === "user_id")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN user_id TEXT`);
+    }
+  }
   const parseAction = (row) => row ? {
-    id: row.id, actorId: row.actor_id, actorName: row.actor_name, requestKey: row.request_key,
+    id: row.id, userId: row.user_id, actorId: row.actor_id, actorName: row.actor_name, requestKey: row.request_key,
     operation: row.operation, args: JSON.parse(row.args_json), preview: JSON.parse(row.preview_json),
     status: row.status, result: row.result_json ? JSON.parse(row.result_json) : null,
     error: row.error, createdAt: row.created_at, resolvedAt: row.resolved_at,
   } : null;
   const parseToken = (row) => row ? {
-    id: row.id, name: row.name, prefix: row.prefix, mode: row.mode, createdAt: row.created_at, revokedAt: row.revoked_at,
+    id: row.id, userId: row.user_id, name: row.name, prefix: row.prefix, mode: row.mode, spaceId: row.space_id, createdAt: row.created_at, revokedAt: row.revoked_at,
   } : null;
   function getAction(id) {
     const action = parseAction(db.prepare("SELECT * FROM agent_actions WHERE id = ?").get(id));
@@ -41,10 +49,19 @@ export function createAgentRepository(db) {
       db.prepare("INSERT INTO agent_settings VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value_json = excluded.value_json")
         .run(name, JSON.stringify(value));
     },
-    listTokens() { return db.prepare("SELECT * FROM agent_tokens ORDER BY created_at DESC, rowid DESC").all().map(parseToken); },
-    insertToken({ name, hash, prefix, mode }) {
+    listTokens({ userId } = {}) {
+      return db.prepare("SELECT * FROM agent_tokens WHERE (? IS NULL OR user_id = ?) ORDER BY created_at DESC, rowid DESC")
+        .all(userId ?? null, userId ?? null).map(parseToken);
+    },
+    getToken(id) {
+      const token = parseToken(db.prepare("SELECT * FROM agent_tokens WHERE id = ?").get(id));
+      if (!token) throw new AppError(404, "Token not found.");
+      return token;
+    },
+    insertToken({ name, hash, prefix, mode, spaceId = "default", userId = null }) {
       const id = randomUUID();
-      db.prepare("INSERT INTO agent_tokens VALUES (?, ?, ?, ?, ?, ?, NULL)").run(id, name, hash, prefix, mode, new Date().toISOString());
+      db.prepare("INSERT INTO agent_tokens (id, name, token_hash, prefix, mode, created_at, revoked_at, space_id, user_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)")
+        .run(id, name, hash, prefix, mode, new Date().toISOString(), spaceId, userId);
       return parseToken(db.prepare("SELECT * FROM agent_tokens WHERE id = ?").get(id));
     },
     findToken(hash) { return parseToken(db.prepare("SELECT * FROM agent_tokens WHERE token_hash = ? AND revoked_at IS NULL").get(hash)); },
@@ -62,21 +79,21 @@ export function createAgentRepository(db) {
     findAction(actorId, requestKey) {
       return parseAction(db.prepare("SELECT * FROM agent_actions WHERE actor_id = ? AND request_key = ?").get(actorId, requestKey));
     },
-    listActions({ actorId, pending = false } = {}) {
-      return db.prepare(`SELECT * FROM agent_actions WHERE (? IS NULL OR actor_id = ?) AND (? = 0 OR status = 'pending')
-        ORDER BY created_at DESC, rowid DESC LIMIT 100`).all(actorId ?? null, actorId ?? null, pending ? 1 : 0).map(parseAction);
+    listActions({ actorId, userId, pending = false } = {}) {
+      return db.prepare(`SELECT * FROM agent_actions WHERE (? IS NULL OR actor_id = ?) AND (? IS NULL OR user_id = ?) AND (? = 0 OR status = 'pending')
+        ORDER BY created_at DESC, rowid DESC LIMIT 100`).all(actorId ?? null, actorId ?? null, userId ?? null, userId ?? null, pending ? 1 : 0).map(parseAction);
     },
-    actionFeed(actorId) {
-      return db.prepare(`SELECT * FROM agent_actions WHERE (? IS NULL OR actor_id = ?)
+    actionFeed(actorId, userId) {
+      return db.prepare(`SELECT * FROM agent_actions WHERE (? IS NULL OR actor_id = ?) AND (? IS NULL OR user_id = ?)
         ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, created_at DESC, rowid DESC LIMIT 200`)
-        .all(actorId ?? null, actorId ?? null).map(parseAction);
+        .all(actorId ?? null, actorId ?? null, userId ?? null, userId ?? null).map(parseAction);
     },
-    insertAction({ actorId, actorName, requestKey, operation, args, preview }) {
+    insertAction({ actorId, actorName, requestKey, operation, args, preview, userId = null }) {
       const id = randomUUID();
       db.prepare(`INSERT INTO agent_actions
-        (id, actor_id, actor_name, request_key, operation, args_json, preview_json, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
-        .run(id, actorId, actorName, requestKey, operation, JSON.stringify(args), JSON.stringify(preview), new Date().toISOString());
+        (id, actor_id, actor_name, request_key, operation, args_json, preview_json, status, created_at, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
+        .run(id, actorId, actorName, requestKey, operation, JSON.stringify(args), JSON.stringify(preview), new Date().toISOString(), userId);
       return getAction(id);
     },
     resolveAction(id, status, result = null, error = null) {
@@ -84,16 +101,16 @@ export function createAgentRepository(db) {
         .run(status, result == null ? null : JSON.stringify(result), error, new Date().toISOString(), id);
       return getAction(id);
     },
-    createSession() {
+    createSession(userId = null) {
       const id = randomUUID();
       const now = new Date().toISOString();
-      db.prepare("INSERT INTO assistant_sessions VALUES (?, '[]', ?, ?)").run(id, now, now);
-      return { id, messages: [], createdAt: now, updatedAt: now };
+      db.prepare("INSERT INTO assistant_sessions (id, messages_json, created_at, updated_at, user_id) VALUES (?, '[]', ?, ?, ?)").run(id, now, now, userId);
+      return { id, userId, messages: [], createdAt: now, updatedAt: now };
     },
     getSession(id) {
       const row = db.prepare("SELECT * FROM assistant_sessions WHERE id = ?").get(id);
       if (!row) throw new AppError(404, "Conversation not found.");
-      return { id: row.id, messages: JSON.parse(row.messages_json), createdAt: row.created_at, updatedAt: row.updated_at };
+      return { id: row.id, userId: row.user_id, messages: JSON.parse(row.messages_json), createdAt: row.created_at, updatedAt: row.updated_at };
     },
     saveSession(id, messages) {
       db.prepare("UPDATE assistant_sessions SET messages_json = ?, updated_at = ? WHERE id = ?")

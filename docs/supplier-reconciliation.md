@@ -1,5 +1,9 @@
 # Supplier Reconciliation and Spreadsheet Import
 
+> Historical prototype only. Dedicated supplier recognition/reconciliation modules and
+> the routes below are retired. Generic spreadsheet import remains available across
+> current forms; see [the current user guide](user-guide.md).
+
 ## Workspace
 
 **Supplier Reconciliation** contains **Goods Receipts**, **Supplier Documents**, **Document recognition**, and **Reconciliation results**. The two default tables are created on first entry, not during database migration. Existing orders and meeting data are not replaced.

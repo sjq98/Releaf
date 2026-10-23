@@ -4,7 +4,7 @@ This folder is for the team's final competition documents. Uploading the current
 
 ## Current Prototype
 
-The 2026-10-22 code update includes custom tables and order history, AI-assisted meeting follow-up, a floating assistant and token-based Agent API, shared XLSX/CSV import, supplier document recognition, and deterministic quantity reconciliation. The Windows launcher and default local server use port 5174. See the root [README](../README.md) for setup and current limitations.
+The 2026-10-23 code update includes a product catalog, warehouse stock, linked inbound/outbound documents and detail lines, fixed approval/posting workflows, and XLSX/CSV imports inside applications. Local accounts provide administrator/member roles; the floating assistant and independent Agent tokens inherit their owning account's permissions. Custom forms, field formulas, notifications, AI tasks and audit history remain available. Legacy business modules and configurable cross-form automation are retired from the active application; historical prototypes are preserved under `future/`. The Windows launcher and default local server use port 5174. See the root [README](../README.md) for setup and current limitations.
 
 These implementation details support preparation of the proposal and technical declaration; they do not establish live AI accuracy, deployed judge access, Orbyte integration, sponsor-platform usage, or measured SDG impact.
 

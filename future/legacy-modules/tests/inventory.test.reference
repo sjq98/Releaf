@@ -1,0 +1,316 @@
+// Historical tests for the retired recipe inventory module.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createStore } from "../src/store.js";
+import { createInventoryModule } from "../src/inventory.js";
+import { createAgentOperations } from "../src/agent-operations.js";
+import { createTableImport } from "../src/table-import.js";
+import { createApp } from "../src/server.js";
+
+const create = (store, form, values) => store.createRecord(form.id, { schemaVersion: form.version, values }).record;
+const edit = (store, record, values) => store.updateRecord(record.id, {
+  schemaVersion: store.getForm(record.formId).version, version: store.getRecord(record.id).version, values,
+}).record;
+function fixture(t, database = ":memory:") {
+  const store = createStore(database);
+  t.after(() => store.close());
+  const inventory = createInventoryModule(store), forms = inventory.ensureTables();
+  const orders = store.bootstrap().form;
+  const material = (sku, unit = "kg") => create(store, forms.materials, { sku, name: sku, unit, reorderLevel: 1 });
+  const flour = material("FLOUR"), salt = material("SEA-SALT"), butter = material("BUTTER");
+  const bread = create(store, forms.products, { productCode: "BREAD", name: "Bread" });
+  const recipe = (material, quantity) => create(store, forms.recipes, { product: bread.id, material: material.id, quantityPerUnit: quantity });
+  const flourLine = recipe(flour, .1);
+  recipe(salt, .002); recipe(butter, .02);
+  const order = (quantity = 30, item = "Bread") => create(store, orders, { orderNumber: randomUUID(), completed: "No", item, quantity });
+  const purchase = (material, quantity) => create(store, forms.purchases, { purchaseNumber: randomUUID(), material: material.id, quantity });
+  const post = (body) => {
+    const preview = inventory.preview(body);
+    return inventory.post({ ...body, previewToken: preview.previewToken, idempotencyKey: randomUUID() });
+  };
+  const receive = (material, quantity) => post({ kind: "purchase", sourceId: purchase(material, quantity).id });
+  const stock = () => { receive(flour, 10); receive(salt, 1); receive(butter, 5); };
+  const balance = (material) => inventory.state().summary.find((row) => row.materialId === material.id).onHand;
+  return { store, inventory, forms, orders, flour, salt, butter, bread, flourLine, recipe, order, purchase, post, receive, stock, balance, material };
+}
+
+test("inventory setup is lazy, idempotent and preserves existing orders", (t) => {
+  const store = createStore(":memory:");
+  t.after(() => store.close());
+  const orders = store.bootstrap().form;
+  const order = create(store, orders, { orderNumber: "EXISTING", completed: "No" });
+  const inventory = createInventoryModule(store);
+  assert.equal(store.listForms().length, 1);
+  assert.deepEqual(inventory.state().summary, []);
+  const forms = inventory.ensureTables();
+  assert.equal(store.listForms().length, 5);
+  assert.equal(inventory.ensureTables().materials.id, forms.materials.id);
+  assert.equal(store.getRecord(order.id).values.orderNumber, "EXISTING");
+  assert.equal(store.bootstrap().inventoryTables.recipes, forms.recipes.id);
+  assert.equal(inventory.state().mappings[0].itemField, "item");
+});
+
+test("purchases stay drafts until posted and 30 breads consume three exact material quantities", (t) => {
+  const f = fixture(t);
+  const purchase = f.purchase(f.flour, 10), order = f.order();
+  assert.equal(f.balance(f.flour), "0");
+  assert.equal(f.inventory.state().movements.length, 0);
+  const preview = f.inventory.preview({ kind: "purchase", sourceId: purchase.id });
+  assert.equal(preview.lines[0].direction, "In");
+  assert.equal(f.balance(f.flour), "0");
+  f.post({ kind: "purchase", sourceId: purchase.id });
+  f.receive(f.salt, 1); f.receive(f.butter, 5);
+  const issued = f.post({ kind: "order", sourceId: order.id }).posting;
+  assert.equal(issued.lines.length, 3);
+  assert.equal(issued.lines.find((line) => line.materialId === f.flour.id).quantity, "3");
+  assert.equal(issued.lines.find((line) => line.materialId === f.salt.id).quantity, "0.06");
+  assert.equal(issued.lines.find((line) => line.materialId === f.butter.id).quantity, "0.6");
+  assert.equal(f.balance(f.flour), "7");
+  assert.equal(f.balance(f.salt), "0.94");
+  assert.equal(f.balance(f.butter), "4.4");
+  assert.equal(f.store.getRecord(order.id).values.completed, "No");
+});
+
+test("a stock shortage blocks every line without creating postings or changing records", (t) => {
+  const f = fixture(t);
+  f.receive(f.flour, 10);
+  const order = f.order(), before = f.inventory.state();
+  const draft = f.inventory.preview({ kind: "order", sourceId: order.id });
+  assert.equal(draft.canPost, false);
+  assert.equal(draft.shortages.length, 2);
+  assert.throws(() => f.inventory.post({ kind: "order", sourceId: order.id, previewToken: draft.previewToken, idempotencyKey: randomUUID() }), { status: 409 });
+  assert.deepEqual(f.inventory.state(), before);
+});
+
+test("stock writes are idempotent and prevent a second posting for the same source", (t) => {
+  const f = fixture(t);
+  const body = { kind: "purchase", sourceId: f.purchase(f.flour, 3).id };
+  const request = { ...body, previewToken: f.inventory.preview(body).previewToken, idempotencyKey: randomUUID() };
+  const first = f.inventory.post(request), second = f.inventory.post(request);
+  assert.equal(second.alreadyPosted, true);
+  assert.equal(second.posting.id, first.posting.id);
+  assert.equal(f.balance(f.flour), "3");
+  assert.throws(() => f.inventory.post({ ...request, note: "Different" }), { status: 409 });
+  assert.throws(() => f.inventory.preview(body), { status: 409 });
+});
+
+test("previews detect changed recipes, sources and relevant stock balances", (t) => {
+  const f = fixture(t);
+  f.stock();
+  const order = f.order(), body = { kind: "order", sourceId: order.id };
+  const commit = (preview) => f.inventory.post({ ...body, previewToken: preview.previewToken, idempotencyKey: randomUUID() });
+  const oldRecipe = f.inventory.preview(body);
+  edit(f.store, f.flourLine, { quantityPerUnit: .2 });
+  assert.throws(() => commit(oldRecipe), { status: 409 });
+  const oldSource = f.inventory.preview(body);
+  edit(f.store, order, { quantity: 31 });
+  assert.throws(() => commit(oldSource), { status: 409 });
+  const oldBalance = f.inventory.preview(body);
+  f.receive(f.flour, 1);
+  assert.throws(() => commit(oldBalance), { status: 409 });
+  assert.equal(f.inventory.state().movements.filter((line) => line.direction === "Out").length, 0);
+});
+
+test("reversal restores stock, unlocks source quantities and allows a corrected posting", (t) => {
+  const f = fixture(t);
+  f.stock();
+  const order = f.order(), posted = f.post({ kind: "order", sourceId: order.id }).posting;
+  assert.throws(() => edit(f.store, order, { quantity: 20 }), { status: 409 });
+  assert.throws(() => f.store.deleteRecord(order.id, { version: order.version }), { status: 409 });
+  const completed = edit(f.store, order, { completed: "Yes" });
+  assert.equal(completed.values.completed, "Yes");
+  const reversal = f.post({ kind: "reversal", sourceId: posted.id, note: "Correct order quantity" }).posting;
+  assert.equal(reversal.lines.every((line) => line.direction === "In"), true);
+  assert.equal(f.balance(f.flour), "10");
+  assert.equal(f.store.inventory.posting(posted.id).reversedBy, reversal.id);
+  assert.throws(() => f.inventory.preview({ kind: "reversal", sourceId: posted.id, note: "Again" }), { status: 409 });
+  assert.throws(() => f.inventory.preview({ kind: "reversal", sourceId: reversal.id, note: "Reverse reversal" }), { status: 409 });
+  const corrected = edit(f.store, order, { quantity: 20 });
+  f.post({ kind: "order", sourceId: corrected.id });
+  assert.equal(f.balance(f.flour), "8");
+  assert.equal(f.inventory.state().movements.length, 12);
+});
+
+test("reversing a consumed purchase cannot make stock negative", (t) => {
+  const f = fixture(t);
+  const inbound = f.receive(f.flour, 3).posting;
+  f.receive(f.salt, 1); f.receive(f.butter, 5);
+  f.post({ kind: "order", sourceId: f.order().id });
+  const preview = f.inventory.preview({ kind: "reversal", sourceId: inbound.id, note: "Supplier return" });
+  assert.equal(preview.canPost, false);
+  assert.throws(() => f.inventory.post({ kind: "reversal", sourceId: inbound.id, note: "Supplier return",
+    previewToken: preview.previewToken, idempotencyKey: randomUUID() }), { status: 409 });
+  assert.equal(f.balance(f.flour), "0");
+});
+
+test("material units, posted source fields and core schemas cannot bypass ledger consistency", (t) => {
+  const f = fixture(t), purchase = f.purchase(f.flour, 10);
+  f.post({ kind: "purchase", sourceId: purchase.id });
+  assert.throws(() => edit(f.store, f.flour, { unit: "g" }), { status: 409 });
+  assert.throws(() => edit(f.store, purchase, { material: f.salt.id }), { status: 409 });
+  assert.throws(() => edit(f.store, purchase, { quantity: 20 }), { status: 409 });
+  assert.throws(() => f.store.deleteRecord(f.flour.id, { version: f.flour.version }), { status: 409 });
+  const original = f.store.getForm(f.forms.materials.id);
+  assert.throws(() => f.store.updateForm(original.id, { ...original, fields: original.fields.filter((field) => field.id !== "unit") }), { status: 409 });
+  const renamed = f.store.updateForm(original.id, { ...original, fields: original.fields.map((field) => ({ ...field, name: `Custom ${field.name}` })) });
+  assert.equal(renamed.fields.find((field) => field.id === "unit").name, "Custom Stock unit");
+  assert.equal(f.balance(f.flour), "10");
+});
+
+test("invalid quantities and duplicate recipe materials are rejected on every record path", (t) => {
+  const f = fixture(t);
+  for (const quantity of [0, -1, .0000001, 1e13]) {
+    assert.throws(() => f.purchase(f.flour, quantity), { status: 400 });
+    assert.throws(() => edit(f.store, f.flourLine, { quantityPerUnit: quantity }), { status: 400 });
+  }
+  assert.throws(() => f.recipe(f.flour, .2), { status: 409 });
+  assert.throws(() => edit(f.store, f.flour, { reorderLevel: -1 }), { status: 400 });
+  assert.equal(f.inventory.state().movements.length, 0);
+});
+
+test("opening stock and waste adjustments require reasons and retain exact decimal totals", (t) => {
+  const f = fixture(t);
+  const body = { kind: "adjustment", materialId: f.flour.id, direction: "In", quantity: .1, note: "Opening count" };
+  f.post(body); f.post({ ...body, quantity: .2 });
+  assert.equal(f.balance(f.flour), "0.3");
+  f.post({ ...body, direction: "Out", quantity: .3, note: "Waste" });
+  assert.equal(f.balance(f.flour), "0");
+  assert.throws(() => f.inventory.preview({ ...body, note: "" }), { status: 400 });
+  assert.throws(() => f.inventory.preview({ ...body, direction: "Wrong" }), { status: 400 });
+  assert.equal(f.inventory.state().summary.find((row) => row.materialId === f.flour.id).lowStock, true);
+});
+
+test("custom order mappings use stable field IDs and exact Products references", (t) => {
+  const f = fixture(t);
+  const form = f.store.createForm({ name: "Custom orders", moduleId: "orders", fields: [
+    { id: "code", name: "Code", type: "text", required: true, unique: true, options: [] },
+    { id: "product", name: "Product", type: "reference", required: true, unique: false, options: [],
+      reference: { formId: f.forms.products.id, fieldId: "productCode" } },
+    { id: "amount", name: "Amount", type: "number", required: true, unique: false, options: [] },
+  ] });
+  f.inventory.saveMapping({ formId: form.id, itemField: "product", quantityField: "amount" });
+  const order = create(f.store, form, { code: "CUSTOM", product: f.bread.id, amount: 30 });
+  f.stock(); f.post({ kind: "order", sourceId: order.id });
+  assert.equal(f.balance(f.flour), "7");
+  assert.throws(() => f.store.updateForm(form.id, { ...form, fields: form.fields.filter((field) => field.id !== "amount") }), { status: 409 });
+});
+
+test("unmatched, ambiguous or recipe-less products fail without guessing", (t) => {
+  const f = fixture(t);
+  assert.throws(() => f.inventory.preview({ kind: "order", sourceId: f.order(1, "Unknown").id }), { status: 400 });
+  edit(f.store, f.bread, { name: "Loaf" });
+  create(f.store, f.forms.products, { productCode: "BREAD-2", name: "Loaf" });
+  assert.throws(() => f.inventory.preview({ kind: "order", sourceId: f.order(1, "Loaf").id }), { status: 400 });
+  const byCode = f.inventory.preview({ kind: "order", sourceId: f.order(1, "bread").id });
+  assert.equal(byCode.source.product.code, "BREAD");
+  create(f.store, f.forms.products, { productCode: "CAKE", name: "Cake" });
+  assert.throws(() => f.inventory.preview({ kind: "order", sourceId: f.order(1, "CAKE").id }), { status: 400 });
+});
+
+test("Agent CRUD and spreadsheet imports cannot change posted quantities or create invalid purchases", (t) => {
+  const f = fixture(t), purchase = f.purchase(f.flour, 10);
+  f.post({ kind: "purchase", sourceId: purchase.id });
+  const operations = createAgentOperations(f.store);
+  assert.throws(() => operations.run("update_record", {
+    recordId: purchase.id, schemaVersion: f.forms.purchases.version, version: purchase.version, values: { quantity: 50 },
+  }, { type: "chat", id: "chat", name: "Assistant" }, randomUUID()), { status: 409 });
+  const importer = createTableImport(f.store);
+  const draft = importer.preview({ formId: f.forms.purchases.id, schemaVersion: 1,
+    headers: ["Purchase", "Material", "Qty"], rows: [["BAD", "FLOUR", -1]],
+    mapping: { purchaseNumber: 0, material: 1, quantity: 2 },
+  });
+  assert.equal(draft.errors.length, 1);
+  assert.match(draft.errors[0].message, /Purchase quantity/);
+  assert.throws(() => importer.commit(draft.id), { status: 400 });
+  assert.equal(f.balance(f.flour), "10");
+});
+
+test("stock history, mappings and idempotency persist across database reopen", () => {
+  const directory = mkdtempSync(join(tmpdir(), "releaf-inventory-"));
+  let store;
+  try {
+    const database = join(directory, "test.sqlite");
+    store = createStore(database);
+    const inventory = createInventoryModule(store), forms = inventory.ensureTables();
+    const material = create(store, forms.materials, { sku: "F", name: "Flour", unit: "kg" });
+    const body = { kind: "adjustment", materialId: material.id, quantity: 2, direction: "In", note: "Opening" };
+    const request = { ...body, previewToken: inventory.preview(body).previewToken, idempotencyKey: randomUUID() };
+    inventory.post(request);
+    store.close(); store = createStore(database);
+    const reopened = createInventoryModule(store);
+    assert.equal(reopened.state().summary[0].onHand, "2");
+    assert.equal(reopened.post(request).alreadyPosted, true);
+    assert.equal(reopened.state().mappings.length, 1);
+  } finally {
+    store?.close();
+    assert.ok(directory.startsWith(join(tmpdir(), "releaf-inventory-")));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("HTTP inventory routes enforce local administration, preview tokens and static asset allowlists", async (t) => {
+  const app = createApp({ database: ":memory:", env: {} });
+  await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => app.server.close(resolve)); app.store.close(); });
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const request = (path, body, extra = {}) => fetch(`${base}${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...extra }, body: JSON.stringify(body),
+  });
+  const forms = await (await request("/api/inventory/tables", {})).json();
+  const material = create(app.store, forms.materials, { sku: "F", name: "Flour", unit: "kg" });
+  const body = { kind: "adjustment", materialId: material.id, quantity: 2, direction: "In", note: "Opening" };
+  const draft = await (await request("/api/inventory/preview", body)).json();
+  assert.equal((await request("/api/inventory/post", { ...body, previewToken: draft.previewToken, idempotencyKey: randomUUID() })).status, 200);
+  assert.equal((await (await fetch(`${base}/api/inventory`)).json()).summary[0].onHand, "2");
+  assert.equal((await request("/api/inventory/tables", {}, { Origin: "https://untrusted.test" })).status, 403);
+  assert.equal((await request("/api/inventory/tables", {}, { Authorization: "Bearer rlf_fake" })).status, 403);
+  assert.equal((await request("/api/inventory/post", { ...body, previewToken: "forged", idempotencyKey: randomUUID() })).status, 409);
+  assert.equal((await fetch(`${base}/src/inventory-repository.js`)).status, 404);
+  assert.equal((await fetch(`${base}/inventory.js`)).status, 200);
+  assert.equal((await fetch(`${base}/inventory.css`)).status, 200);
+  assert.equal((await request("/api/inventory/preview", { kind: "adjustment", direction: "In", quantity: 1, note: "Missing material" })).status, 400);
+  assert.equal((await fetch(`${base}/api/inventory/mappings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 400);
+});
+
+test("recipe changes affect future orders, never already posted material quantities", (t) => {
+  const f = fixture(t);
+  f.stock();
+  const first = f.post({ kind: "order", sourceId: f.order(10).id }).posting;
+  edit(f.store, f.flourLine, { quantityPerUnit: .2 });
+  const second = f.post({ kind: "order", sourceId: f.order(10).id }).posting;
+  assert.equal(first.lines.find((line) => line.materialId === f.flour.id).quantity, "1");
+  assert.equal(second.lines.find((line) => line.materialId === f.flour.id).quantity, "2");
+  assert.equal(f.balance(f.flour), "7");
+  f.post({ kind: "reversal", sourceId: first.id, note: "Reverse original recipe quantity" });
+  assert.equal(f.balance(f.flour), "8");
+});
+
+test("concurrent order previews cannot both spend the same available stock", (t) => {
+  const f = fixture(t);
+  f.receive(f.flour, 3); f.receive(f.salt, .06); f.receive(f.butter, .6);
+  const one = { kind: "order", sourceId: f.order().id }, two = { kind: "order", sourceId: f.order().id };
+  const first = f.inventory.preview(one), second = f.inventory.preview(two);
+  assert.equal(first.canPost, true);
+  assert.equal(second.canPost, true);
+  f.inventory.post({ ...one, previewToken: first.previewToken, idempotencyKey: randomUUID() });
+  assert.throws(() => f.inventory.post({ ...two, previewToken: second.previewToken, idempotencyKey: randomUUID() }), { status: 409 });
+  assert.equal(f.balance(f.flour), "0");
+  assert.equal(f.inventory.preview(two).canPost, false);
+});
+
+test("material labels may change without changing historical labels or breaking stock references", (t) => {
+  const f = fixture(t);
+  f.receive(f.flour, 10);
+  edit(f.store, f.flour, { sku: "NEW-FLOUR", name: "New flour label" });
+  const value = f.inventory.state();
+  assert.equal(value.summary.find((row) => row.materialId === f.flour.id).sku, "NEW-FLOUR");
+  assert.equal(value.movements[0].sku, "FLOUR");
+  f.receive(f.salt, 1); f.receive(f.butter, 5);
+  const order = f.post({ kind: "order", sourceId: f.order().id });
+  assert.equal(order.posting.lines.find((line) => line.materialId === f.flour.id).sku, "NEW-FLOUR");
+  assert.equal(f.balance(f.flour), "7");
+});

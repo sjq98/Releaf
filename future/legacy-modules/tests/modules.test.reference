@@ -1,3 +1,4 @@
+// Historical tests for the retired meeting module; not part of the active test suite.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -54,7 +55,7 @@ test("creates the To-do table lazily and idempotently with correct module and re
   assert.equal(store.listForms().length, 2);
   assert.equal(todos.moduleId, "meetings");
   assert.deepEqual(todos.fields.find((field) => field.type === "reference").reference, { formId: orders.id, fieldId: "orderNumber" });
-  assert.equal(store.bootstrap().modules.length, 3);
+  assert.equal(store.bootstrap().modules.length, 4);
   assert.equal(store.bootstrap().meetingTableId, todos.id);
   assert.throws(() => store.createForm({ name: "Wrong", moduleId: "unknown" }), { status: 400 });
 });
@@ -171,6 +172,30 @@ test("AI schema includes custom columns, nullable unknowns and only real referen
   assert.deepEqual(values.properties.relatedOrder.enum, [order.id, null]);
   const items = validateExtraction({ items: [{ ...candidate(order.id), values: { ...candidate(order.id).values, budget: null } }] }, form, meeting, store.referenceCatalog());
   assert.equal(items[0].values.budget, null);
+});
+
+test("meeting extraction excludes calculated fields and attachment IDs, then calculates on commit", async (t) => {
+  const { store, todos } = fixture(t);
+  const form = updateSchema(store, todos, [...todos.fields, field("budget", "number"), field("files", "attachment"),
+    field("total", "number", { formula: { expression: "b * 2", bindings: { b: { scope: "record", fieldId: "budget" } } } }),
+  ]);
+  const result = { items: [{ ...candidate(), values: { ...candidate().values, budget: 25 } }] };
+  let sent;
+  const ai = createMeetingAI({
+    env: { AI_API_KEY: "test-only-key", AI_MODEL: "test-model" },
+    fetchImpl: async (_url, options) => {
+      sent = JSON.parse(options.body);
+      return { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(result) } }] }) };
+    },
+  });
+  const items = validateExtraction(await ai.extract({ form, meeting, references: store.referenceCatalog() }), form, meeting, store.referenceCatalog());
+  const properties = sent.response_format.json_schema.schema.properties.items.items.properties.values.properties;
+  assert.equal(Object.hasOwn(properties, "total"), false);
+  assert.equal(Object.hasOwn(properties, "files"), false);
+  assert.equal(JSON.parse(sent.messages[1].content).fields.some((field) => field.id === "total" || field.id === "files"), false);
+  const draft = store.saveExtraction(form, meeting, items);
+  const committed = store.commitExtraction(draft.id, { items: [{ index: 0, values: items[0].values }] });
+  assert.equal(store.getRecord(committed.recordIds[0]).values.total, 50);
 });
 
 test("validates AI output, exact evidence, types, references and item limits", (t) => {

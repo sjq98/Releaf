@@ -28,12 +28,22 @@ function operation(name, { id, write = false, description, query = false } = {})
 }
 export const AGENT_OPENAPI = {
   openapi: "3.1.0",
-  info: { title: "Releaf Agent API", version: "1.0.0", description: "Local prototype. Agent tokens cannot approve changes, change permissions or configure providers. Full access is granted only by a local workspace administrator." },
+  info: { title: "Releaf Agent API", version: "1.0.0", description: "Local prototype. Agent tokens cannot approve changes, change permissions or configure providers. Authenticated owners manage their token's review/full mode; the owner's current role and workflow permissions always apply." },
   servers: [{ url: "/" }],
   security: [{ AgentToken: [] }],
   paths: {
-    "/api/agent/forms": { get: operation("list_forms"), post: operation("create_form", { write: true }) },
-    "/api/agent/forms/{formId}": { get: operation("get_form", { id: "formId" }), put: operation("update_form", { id: "formId", write: true }) },
+    "/api/agent/files": { post: { ...operation("upload_inventory_file"), responses: { 201: { description: "Uploaded source file metadata. Business records are unchanged.", content: json({}) }, default: error } } },
+    "/api/agent/forms": { get: operation("list_forms", { query: true }), post: operation("create_form", { write: true }) },
+    "/api/agent/operations": { post: {
+      operationId: "run_operation", summary: "Run a discovered tool within this token's Space. Writes follow review/full access.",
+      parameters: [{ name: "Idempotency-Key", in: "header", required: false, description: "Required for write operations.", schema: { type: "string", maxLength: 200 } }],
+      requestBody: { required: true, content: json({ oneOf: AGENT_TOOLS.map(({ function: tool }) => ({
+        type: "object", required: ["operation", "args"], additionalProperties: false,
+        properties: { operation: { const: tool.name }, args: tool.parameters },
+      })) }) },
+      responses: { 200: { description: "Read result or applied action.", content: json({}) }, 202: { description: "Human approval required.", content: json(action) }, default: error },
+    } },
+    "/api/agent/forms/{formId}": { get: operation("get_form", { id: "formId" }), put: operation("update_form", { id: "formId", write: true }), delete: operation("delete_form", { id: "formId", write: true }) },
     "/api/agent/forms/{formId}/records": { get: operation("query_records", { id: "formId", query: true }), post: operation("create_record", { id: "formId", write: true }) },
     "/api/agent/forms/{formId}/query": { post: operation("query_records", { id: "formId" }) },
     "/api/agent/records/{recordId}": { get: operation("get_record", { id: "recordId" }),

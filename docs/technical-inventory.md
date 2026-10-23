@@ -1,6 +1,6 @@
 # Technical Inventory for the Declaration
 
-Working notes for `SDC2026_TeamName_TechDeclaration.pdf`, reviewed on 2026-10-22. This is not a completed or signed declaration.
+Working notes for `SDC2026_TeamName_TechDeclaration.pdf`, reviewed on 2026-10-23. This is not a completed or signed declaration.
 
 ## Software in the Prototype
 
@@ -13,16 +13,19 @@ Working notes for `SDC2026_TeamName_TechDeclaration.pdf`, reviewed on 2026-10-22
 | `exceljs` | 4.4.0 | XLSX parsing in a bounded worker | MIT |
 | `csv-parse` | 7.0.3 | CSV parsing | MIT |
 | `pdfjs-dist` | 6.4.299 | Browser-side PDF page rendering | Apache-2.0 |
-| `decimal.js` | 10.6.0 | Decimal quantity comparison | MIT |
+| `decimal.js` | 10.6.0 | Decimal quantities and formula arithmetic | MIT |
+| `jsep` | 1.4.0 | Parse restricted formula expressions | MIT |
 | Git / GitHub | Repository `sjq98/Releaf` | Version control and source hosting | Service terms; no application dependency |
 
-The project has five direct npm dependencies. ExcelJS's UUID dependency is overridden to 11.1.1; see the lockfile for the full dependency graph. No Python package or GPU runtime is required to run the app.
+The project has six direct npm dependencies. ExcelJS's UUID dependency is overridden to 11.1.1; see the lockfile for the full dependency graph. No Python package or GPU runtime is required to run the app.
 
 ## External APIs and Models
 
-The app supports independently configured meeting-extraction and chat-assistant providers. Both use model discovery and compatible Chat Completions; extraction requires strict JSON schema, while the assistant requires function/tool calling. It has no fixed production provider or bundled model. Record the actual provider, model ID/version, access tier, and applicable terms used by the team when preparing the declaration. Do not copy keys or Agent tokens into any document.
+The app supports independently configured workspace AI-task and chat-assistant providers. Both use model discovery and compatible Chat Completions; tasks require strict JSON schema, while the assistant requires function/tool calling. It has no fixed production provider or bundled model. Record the actual provider, model ID/version, access tier, and applicable terms used by the team when preparing the declaration. Do not copy keys or Agent tokens into any document.
 
-Supplier document recognition shares the workspace extraction provider and additionally requires image inputs. Original files and recognition drafts are stored locally; rendered document-page images and reference candidates are transmitted to the configured provider. Quantity reconciliation itself is deterministic and does not call AI.
+Legacy meeting extraction, supplier recognition/reconciliation and recipe/purchase inventory modules are retired. Their source is retained only in the independent `future/` snapshot and is not served by the active app. Fixed warehouse calculations do not call AI.
+
+Configurable AI tasks also use the workspace provider with per-task model selection. Selected record fields and attachment pages form the input; a strict destination-field schema controls output. Tasks can require review or automatically apply valid results. Models are not permitted to return executable code or arbitrary database operations.
 
 An API being configurable does not establish that it was used, sponsored, hosted on RunPod, or tested live.
 
@@ -40,7 +43,7 @@ The team must review generated code and documents, run the tests, manually verif
 
 No training or fine-tuning dataset is included. `examples/meeting.txt` is synthetic walkthrough text; automated tests use synthetic fixtures and mocked AI output. Inventory any additional meeting records or evaluation datasets the team actually uses, including personal-data status and permission.
 
-The local app stores records, meeting material, assistant conversations and action logs in SQLite. Extraction transmits the text, schema, and relevant reference identifiers/unique values to an external provider; chat sends messages and requested tool results. Saved provider keys are server-side but unencrypted. External Agent tokens are hashed and have independent review/full-access modes; local workspace administration still trusts loopback programs. No automatic retention period, user login, tenant ownership or production deployment security is implemented. Record actual retention and deployment arrangements before signing.
+The local app stores records, warehouse history, assistant conversations and action logs in SQLite. AI tasks transmit selected inputs, schemas and relevant reference identifiers/unique values to an external provider; chat sends messages and requested tool results. Retired forms and historical legacy material remain in local storage and backups rather than being purged. Saved provider keys are server-side but unencrypted. External Agent tokens are hashed and have independent review/full-access modes; local workspace administration still trusts loopback programs. No automatic retention period, user login, tenant ownership or production deployment security is implemented. Record actual retention and deployment arrangements before signing.
 
 ## Items Only the Team Can Confirm
 

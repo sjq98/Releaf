@@ -95,10 +95,10 @@ test("table-edit previews include lost values, roll back schema changes and dete
 
 test("creating and editing forms uses the same constraints and keeps stable field IDs", (t) => {
   const { store, operations, run } = fixture(t);
-  const proposed = run("create_form", { name: "Suppliers", moduleId: "meetings", fields });
+  const proposed = run("create_form", { name: "Suppliers", moduleId: "custom", fields });
   assert.equal(store.listForms().length, 2);
   const form = operations.approve(proposed.id).result;
-  assert.equal(form.moduleId, "meetings");
+  assert.equal(form.moduleId, "custom");
   const edit = run("update_form", { formId: form.id, version: form.version, name: "Partners",
     fields: form.fields.map((item) => ({ ...item, name: item.id === "code" ? "Partner code" : item.name })) }, "edit");
   const saved = operations.approve(edit.id).result;
@@ -204,8 +204,9 @@ async function httpFixture(t, assistantFetch = async () => Response.json({ data:
   await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   t.after(async () => { await new Promise((resolve) => app.server.close(resolve)); app.store.close(); });
   const base = `http://127.0.0.1:${app.server.address().port}`;
+  const { sessionToken } = app.store.auth.setup({ username: "agent-test-admin", password: "test-admin-password" });
   const request = (path, method = "GET", body, headers = {}) => fetch(base + path, {
-    method, headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...headers },
+    method, headers: { Cookie: `releaf_session=${sessionToken}`, ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...headers },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   return { app, request, base };
@@ -220,7 +221,7 @@ test("HTTP Agent API requires tokens, supports CRUD previews and cannot approve 
   const token = await (await request("/api/assistant/tokens", "POST", { name: "External agent" })).json();
   const headers = { Authorization: `Bearer ${token.token}` };
   const form = app.store.listForms()[0];
-  const body = { schemaVersion: form.version, values: { orderNumber: "A-1", completed: "No" } };
+  const body = { schemaVersion: form.version, values: { name: "A-1" } };
   assert.equal((await request(`/api/agent/forms/${form.id}/records`, "POST", body, headers)).status, 400);
   const response = await request(`/api/agent/forms/${form.id}/records`, "POST", body, { ...headers, "Idempotency-Key": "create-1" });
   assert.equal(response.status, 202);
@@ -235,7 +236,7 @@ test("HTTP Agent API requires tokens, supports CRUD previews and cannot approve 
   const record = applied.result.record;
   assert.equal(applied.status, "applied");
   assert.equal((await request(`/api/agent/records/${record.id}`, "GET", undefined, headers)).status, 200);
-  const query = await (await request(`/api/agent/forms/${form.id}/query`, "POST", { filters: [{ fieldId: "completed", operator: "eq", value: "No" }] }, headers)).json();
+  const query = await (await request(`/api/agent/forms/${form.id}/query`, "POST", { filters: [{ fieldId: "name", operator: "eq", value: "A-1" }] }, headers)).json();
   assert.equal(query.total, 1);
   assert.equal((await request(`/api/agent/forms/${form.id}/records?filters=not-json`, "GET", undefined, headers)).status, 400);
   const reboundStatus = await new Promise((resolve, reject) => {
@@ -270,7 +271,7 @@ test("Agent tokens can only read their own actions and can discover schemas with
   const headers = { Authorization: `Bearer ${first.token}`, "Idempotency-Key": "create" };
   const form = app.store.listForms()[0];
   const action = await (await request(`/api/agent/forms/${form.id}/records`, "POST",
-    { schemaVersion: 1, values: { orderNumber: "OWN", completed: "No" } }, headers)).json();
+    { schemaVersion: 1, values: { name: "OWN" } }, headers)).json();
   assert.equal((await request(`/api/agent/actions/${action.id}`, "GET", undefined, { Authorization: `Bearer ${second.token}` })).status, 404);
   const spec = await (await request("/api/agent/openapi.json", "GET", undefined, headers)).json();
   assert.equal(spec.openapi, "3.1.0");
@@ -278,7 +279,10 @@ test("Agent tokens can only read their own actions and can discover schemas with
   assert.ok(!spec.paths["/api/agent/forms/{formId}"].get.requestBody);
   assert.ok(!spec.paths["/api/assistant/mode"]);
   assert.ok(!JSON.stringify(spec).includes(first.token));
-  assert.equal((await (await request("/api/agent/tools", "GET", undefined, headers)).json()).tools.length, 9);
+  const tools = (await (await request("/api/agent/tools", "GET", undefined, headers)).json()).tools;
+  assert.ok(!tools.some((tool) => tool.function.name === "create_automation"));
+  assert.ok(tools.some((tool) => tool.function.name === "create_notification_rule"));
+  assert.ok(tools.some((tool) => tool.function.name === "start_ai_task"));
 });
 
 test("full mode changes only future requests; enabling it does not auto-apply an old proposal", (t) => {

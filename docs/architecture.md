@@ -1,66 +1,104 @@
 # Architecture
 
-## Current System
+## Runtime
 
 ```text
-Browser (public/)
+Browser: generic forms / warehouse / assistant
     |
-    | same-origin HTTP / JSON
-    v
-Node.js server (src/server.js)
-    |-- store.js ---------> SQLite (data/forms.sqlite, not committed)
-    |-- field-types.js ---> Shared normalization / validation
-    |-- modules.js -------> Order / Meeting / Supplier module definitions
-    `-- ai-config.js -----> Upstream model list / saved configuration
-             |
-             `-- meeting-ai.js ---> Configured external AI provider
+src/server.js: local routes, security checks, explicit asset allowlist
+    |-- auth.js: local accounts, password/session verification and role context
+    |-- agent-http.js / agent-operations.js: scoped Agent operations
+    |-- warehouse-system.js: fixed workflows and stock movements
+    |-- warehouse-import.js: scoped spreadsheets, matching and atomic workflow batches
+    |-- form-deletion.js: impact, dependencies and confirmation
+    |-- table-import.js / import-drafts.js: spreadsheet imports
+    |-- ai-tasks.js: structured processing queue and reviewed writeback
+    `-- store.js: shared validation, references, versions, history and SQLite
 ```
 
-The floating assistant adds `assistant.js` (server-owned conversations and tool-call loop), `agent-operations.js` (shared allowlisted queries/mutations), `agent-repository.js` (tokens, settings, conversations and action log), and `agent-http.js` (separate Agent and local-administration routes). `agent-openapi.js` derives external endpoint request schemas from the same tool definitions.
+Warehouse totals, line states, balances and transitions live in one module, called by
+both UI routes and Agent tools. Store hooks enforce protected balances, statuses,
+core-field definitions and history. Members use single-use catalog/document service
+permits; administrators can maintain records/custom fields within the same business
+constraints. Product IDs are independent of warehouse
+stock IDs; first inbound posting creates a stock row. See [warehouse.md](warehouse.md).
 
-The native Node.js HTTP server serves an explicit allowlist of browser assets. `src/field-types.js` and `src/errors.js` are deliberately served as shared browser modules; server-only code, environment files, and the database are not served. Moving source files into `src/` does not change the public asset URLs or the default database location.
+The fixed warehouse workflow does not invoke the archived configurable cross-form
+engine. It reuses shared CRUD, transactions, references, change history and notification
+infrastructure. Customizable cross-form actions are not part of the active write path.
 
-## Orders and References
+## Authentication and Roles
 
-Tables define stable field IDs, names, types, and constraints. Records contain values keyed by those IDs. A separate unique-value index enforces uniqueness, while version numbers detect stale writes.
+`auth.js` creates the first administrator only when no accounts exist. There is no
+default password; passwords need at least 12 characters and use salted scrypt hashes.
+Browser business API requests require a seven-day HttpOnly, SameSite=Strict session cookie;
+session tokens are hashed in SQLite. Role, password and active-status changes invalidate
+the user's sessions. Administrators manage accounts, and the last active administrator
+cannot be disabled or demoted. Users can change their own password or sign out.
 
-Every record creation, update, and deletion creates a history event. Updates store field-level differences. Editing a schema is not itself a record history event, and changing an order does not automatically create a follow-up task.
+Administrators manage forms, generic records, navigation, provider/task/rule settings
+and users. Members read shared data and use warehouse/catalog operations, notifications,
+configured AI task runs and their assistant/tokens. A request's applicant and workflow
+actor come from the authenticated account; approval/rejection requires the assigned
+active approver. Roles do not bypass protected warehouse state or stock checks.
 
-Reference values hold target record IDs. Display labels are resolved from the target table's unique field, so renaming an order number preserves its links. Deletion and incompatible schema changes are blocked when they would invalidate references.
+External Agent Bearer tokens belong to an account and Space. Each request reloads the
+active owner and executes in that owner's role context. Approval rechecks the proposal
+owner's current permissions instead of borrowing the confirming administrator's role.
+Review/full access controls confirmation, not authorization. Ownerless legacy tokens
+cannot authenticate after account setup. Conversations and proposals are owner-bound;
+members access their own, while administrators can manage them across users.
 
-## Meeting Extraction
+## Forms and Deletion
 
-1. The user supplies a meeting title, date, and text.
-2. The server builds a structured extraction request from the current table schema and permitted reference candidates.
-3. The configured provider returns proposed values and evidence quotes.
-4. The server validates the structure, values, reference IDs, and verbatim evidence, then stores a draft.
-5. The user corrects the draft and selects items.
-6. A transaction creates the selected records and retains source provenance. Repeating a completed commit returns the existing result.
+Fields and records have stable IDs. Shared store methods validate required/unique
+constraints, restricted numeric formulas and references. Navigation is separate from
+business bindings; moving a folder or form does not change identity.
 
-AI output is data, never executable SQL or application code. Tests mock provider responses; a passing suite does not prove that any particular upstream model supports strict structured output or tool calling.
+Deletion uses one shared interface for dependency inspection and transactional removal.
+Preview returns schema version, record count, blockers and a Space fingerprint.
+Confirmation rechecks these. Warehouse core forms and reference/task dependencies
+cannot be bypassed through Agent tools. Whole-form Agent deletion always requires
+human confirmation, even in full access.
 
-## Supplier Reconciliation and Imports
+Deletion removes navigation, unique indexes and owned notifications, then sets
+`forms.deleted_at`. Records and activity remain local history, inaccessible through
+active form/record routes. `form_deletions` retains an audit entry. Empty Spaces are
+valid and do not regenerate templates. See [form-deletion.md](form-deletion.md).
 
-`table-import.js` validates generic row-to-field mappings and stores reviewed previews; `table-import-worker.js` parses XLSX/CSV in a time/memory-bounded worker using ExcelJS and csv-parse. Existing store methods validate previews inside rollback savepoints, then revalidate and commit the entire import transactionally. Imports append, never silently overwrite.
+## Processing
 
-`supplier-reconciliation.js` owns receipt/document defaults, schema-aware vision extraction, reviewed document commits and deterministic quantity matching. The browser renders PDF pages with PDF.js before sending page images to the configured workspace extraction provider. `workflow-repository.js` stores table roles, import drafts, original files, document provenance and comparison snapshots in SQLite.
+`automation.js` retains notifications, expressions, queries, transaction effects,
+fingerprints, idempotency and Error Center, not configurable cross-form actions.
+`expressions.js` evaluates restricted formulas through jsep and Decimal.js.
+AI inference runs outside transactions; typed outputs go through the same store.
+Uploads are Space-scoped.
 
-Receipt and supplier tables remain ordinary custom tables, so references, field edits, history and Agent record operations use existing store behavior. Supplier files and workflow routes are local administration only. Comparison results retain immutable computed data while allowing reviewed status/notes with version checks. Changed selected source rows or schemas mark snapshots stale. See [workflow details](supplier-reconciliation.md).
+The assistant uses server-owned conversation history and allowlisted operations.
+Previews run real validation in rollback savepoints. Confirmation rechecks dependencies
+and atomically commits business changes plus action status. Agent tokens cannot approve
+their own proposals or access local settings.
 
-## Assistant Operations and Approval
+Preview rollback restores the in-memory effect context as well as SQLite data, so
+Agent full-access batches do not double-count simulated changes. Spreadsheet parsing
+runs outside transactions in the existing bounded worker. Files and completed import
+plans are stored separately; matching is read-only and execution calls the same
+document transitions as the UI. A failure rolls back every request in the batch.
 
-Chat and external Agent APIs share one operation service. Writes run existing store methods inside a rollback savepoint to produce a validated preview. Approving runs the immutable request again, verifies expected versions (and table-record fingerprints for schema edits), and atomically commits both business data and action status. Idempotency keys prevent duplicate execution. Full access uses the same pipeline but applies immediately.
+## Retired Modules
 
-The UI controls chat permissions; each external token has separate permissions. Agent tokens cannot call local approval/configuration routes. Token values are returned only at creation and stored as hashes. Revocation rejects pending proposals from that token. Preview creation does not leave records, unique indexes or business activity behind. Agent action history also records table-schema operations, which are not part of the existing record activity list.
+Old order, meeting, supplier and recipe/purchase logic is not loaded by the active
+server. Source is isolated under `future/cross-form-automation/`; historical docs/tests
+are under `future/legacy-modules/`. Maintenance backs up SQLite before retiring registered
+templates, preserving custom forms, current warehouse data and secrets. Historical
+business rows are not physically purged. Saved cross-form rules remain dormant and
+`/api/automations` is retired (410); no runtime flag re-enables the archived engine.
 
-## Configuration and Data
+## Deployment
 
-Saved provider settings override environment fallback settings and apply without restarting. Environment changes require a restart. The API returns whether a key is present, never the saved key itself.
-
-SQLite stores business records, meeting source text, drafts, history, assistant conversations/actions, token hashes, and saved provider credentials. Provider credentials and business content are not encrypted at rest. Meeting extraction and assistant providers are configured independently. Extraction sends meeting text, field definitions, and relevant reference identifiers/unique values to the chosen provider; chat sends conversation text and requested tool results. No automatic data-retention policy is implemented.
-
-## Integration Status
-
-Orbyte integration, Replit deployment, and RunPod-specific integration are not implemented. `/api/agent/` provides Bearer-token authorization, OpenAPI discovery and approval-aware operations for future adapters. The local workspace still trusts loopback clients and has no user accounts, tenant ownership or authenticated human identity. Local programs can access legacy administration without a token; token separation is not a sandbox against software on the same computer. See [Agent API](agent-api.md).
-
-The local server binds to `127.0.0.1`; cloud deployment and multi-user access need explicit work. No diagram or configuration here claims a live sponsor-platform integration.
+The server binds to loopback on 5174. Browser APIs require sessions and external Agent
+APIs require owner-bound tokens; local Host/origin and connection checks remain.
+Accounts share one local workspace rather than isolated tenants. Keys and business
+content are unencrypted at rest. Public deployment still needs tenant ownership,
+TLS, a trusted proxy/Host policy, deployment-wide rate limits and production secret
+storage. Orbyte, Replit and RunPod integration are not implemented.
