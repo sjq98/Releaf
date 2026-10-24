@@ -32,6 +32,13 @@ export function createAutomation({ db, store }) {
     CREATE TABLE IF NOT EXISTS local_requests (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result_json TEXT NOT NULL);
   `);
   let context = null;
+  function visibleRecord(formId, recordId, ownerId) {
+    if (typeof formId !== "string" || !store.orders?.roleOf(formId)) return true;
+    const user = store.auth.currentUser();
+    if (!user || user.role === "admin") return true;
+    const row = recordId ? db.prepare("SELECT values_json FROM records WHERE id = ? AND form_id = ?").get(recordId, formId) : null;
+    return row ? store.orders.isVisible(formId, JSON.parse(row.values_json)) : ownerId === user.id;
+  }
   const notificationOnly = (rule) => Array.isArray(rule.actions) && rule.actions.length === 1 && rule.actions[0].type === "notify";
   const ruleFrom = (row) => ({ ...JSON.parse(row.payload_json), id: row.id, version: row.version, enabled: Boolean(row.enabled), createdAt: row.created_at, updatedAt: row.updated_at });
   function list(spaceId = "default", formId) {
@@ -218,7 +225,7 @@ export function createAutomation({ db, store }) {
       }
     },
     logError(error, details = {}) {
-      const ctx = { ...error.automationContext, ...details, ...(error.automationContext ? { ruleId: error.automationContext.ruleId, ruleName: error.automationContext.ruleName, step: error.automationContext.step, ruleContext: error.automationContext } : {}) };
+      const ctx = { ...error.automationContext, ...details, userId: store.auth.currentUser()?.id ?? null, ...(error.automationContext ? { ruleId: error.automationContext.ruleId, ruleName: error.automationContext.ruleName, step: error.automationContext.step, ruleContext: error.automationContext } : {}) };
       const id = randomUUID();
       db.prepare("INSERT INTO processing_errors (id, space_id, category, message, context_json, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
         id, ctx.spaceId ?? "default", ctx.category ?? "Processing", String(error.message || error).slice(0, 2000), JSON.stringify(ctx), new Date().toISOString());
@@ -227,7 +234,8 @@ export function createAutomation({ db, store }) {
     errors(spaceId = "default") {
       store.spaces.get(spaceId);
       return db.prepare("SELECT * FROM processing_errors WHERE space_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 500").all(spaceId)
-        .map((row) => ({ id: row.id, spaceId: row.space_id, category: row.category, message: row.message, status: row.status, context: JSON.parse(row.context_json), createdAt: row.created_at }));
+        .map((row) => ({ id: row.id, spaceId: row.space_id, category: row.category, message: row.message, status: row.status, context: JSON.parse(row.context_json), createdAt: row.created_at }))
+        .filter(row => visibleRecord(row.context.formId, row.context.recordId, row.context.userId));
     },
     resolveError(id, status) {
       if (!["Unresolved", "Resolved", "Ignored"].includes(status)) fail("Invalid error status.");
@@ -240,11 +248,17 @@ export function createAutomation({ db, store }) {
       const rows = formId
         ? db.prepare("SELECT * FROM automation_runs WHERE space_id = ? AND json_extract(payload_json, '$.event.formId') = ? ORDER BY created_at DESC, rowid DESC LIMIT 200").all(spaceId, formId)
         : db.prepare("SELECT * FROM automation_runs WHERE space_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 200").all(spaceId);
-      return rows.map((row) => ({ id: row.id, ruleId: row.rule_id, ...JSON.parse(row.payload_json), createdAt: row.created_at }));
+      return rows.map((row) => ({ id: row.id, ruleId: row.rule_id, ...JSON.parse(row.payload_json), createdAt: row.created_at }))
+        .filter(row => [row.event, ...(row.changes ?? [])].every(change => visibleRecord(change?.formId, change?.recordId)));
     },
     notifications: (spaceId = "default") => db.prepare("SELECT * FROM notifications WHERE space_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 100").all(spaceId)
+      .filter(row => visibleRecord(row.form_id, row.record_id))
       .map((row) => ({ id: row.id, formId: row.form_id, recordId: row.record_id, message: row.message, read: Boolean(row.read), createdAt: row.created_at })),
-    readNotification(id) { db.prepare("UPDATE notifications SET read = 1 WHERE id = ?").run(id); return { id }; },
+    readNotification(id) {
+      const row = db.prepare("SELECT * FROM notifications WHERE id = ?").get(id);
+      if (!row || !visibleRecord(row.form_id, row.record_id)) fail("Notification not found.", 404);
+      db.prepare("UPDATE notifications SET read = 1 WHERE id = ?").run(id); return { id };
+    },
     once(key, input, callback) {
       if (!key) return callback();
       if (typeof key !== "string" || key.length > 200) fail("Invalid idempotency key.");
@@ -263,7 +277,7 @@ export function createAutomation({ db, store }) {
     fingerprint(spaceId) {
       const forms = store.listForms(spaceId);
       return fingerprint({ forms, navigation: store.spaces.tree(spaceId), records: forms.map((form) => store.listRecords(form.id)), rules: list(spaceId), tasks: store.tasks?.list(spaceId) ?? [],
-        warehouse: store.warehouse.fingerprint(spaceId) });
+        warehouse: store.warehouse.fingerprint(spaceId), orders: store.orders?.fingerprint(spaceId) ?? null });
     },
   };
 }

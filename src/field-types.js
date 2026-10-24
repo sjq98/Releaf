@@ -39,6 +39,11 @@ export function validateFields(input) {
       if (new Set(options.map((option) => option.toLowerCase())).size !== options.length) fail(`"${name}" has duplicate options.`);
     }
     const result = { id: field.id, name, type: field.type, required: field.required, unique: field.unique, options };
+    if (field.maxLength != null) {
+      if (!["text", "longtext"].includes(field.type) || !Number.isInteger(field.maxLength) ||
+          field.maxLength < 1 || field.maxLength > 40000) fail(`Invalid text length limit for "${name}".`);
+      result.maxLength = field.maxLength;
+    }
     if (field.formula != null) {
       if (field.type !== "number" || typeof field.formula.expression !== "string" ||
           !field.formula.bindings || typeof field.formula.bindings !== "object" || Array.isArray(field.formula.bindings)) fail("Only number fields support a valid formula.");
@@ -78,7 +83,7 @@ export function normalizeField(field, input) {
     return null;
   }
   if (field.type === "text" || field.type === "longtext") {
-    const max = field.type === "text" ? 1000 : 5000;
+    const max = field.maxLength ?? (field.type === "text" ? 1000 : 5000);
     if (typeof input !== "string" || input.trim().length > max) throw new Error(`Enter text with at most ${max} characters.`);
     const text = input.trim();
     if (!text && field.required) throw new Error(`${field.name} is required.`);

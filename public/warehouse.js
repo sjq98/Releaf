@@ -51,10 +51,11 @@ export function initWarehouse({ api, icons, toast, getState, refresh, navigate, 
     let bar = $("warehouse-toolbar");
     if (!bar) { bar = document.createElement("div"); bar.id = "warehouse-toolbar"; $("record-table-wrap").before(bar); }
     const role = roleOf(current().form.id), selected = filterState();
+    const catalogRole = ["products", "warehouses"].includes(role);
     $("view-records").classList.toggle("warehouse-records", Boolean(role));
     $("edit-table").hidden = !allowed("manageForms");
     $("delete-table").hidden = Boolean(role) || !allowed("manageForms");
-    $("create-record").hidden = Boolean(role) || !allowed("editRecords");
+    $("create-record").hidden = role ? !catalogRole || !allowed("editRecords") : !allowed("editRecords");
     $("import-spreadsheet").hidden = Boolean(role) || !allowed("manageForms");
     bar.hidden = !role;
     if (!role) return;
@@ -83,7 +84,7 @@ export function initWarehouse({ api, icons, toast, getState, refresh, navigate, 
     const target = $("view-warehouse-flows");
     target.innerHTML = html`<div class="page-heading"><div><div class="eyebrow">${esc(current().space.name)}</div><h1>Warehouse workflows</h1></div>${!data().tables.stock ? button("data-wh-setup", "plus", "Set up warehouse", true) : ""}</div>${data().tables.stock ? html`<div class="warehouse-flow-list">${data().workflows.map(flow => html`<article class="warehouse-flow"><span class="warehouse-flow-icon">${icon(flow.kind === "inbound" ? "package-plus" : "package-minus")}</span><div><h2>${uiText(flow.name)}</h2><ol class="warehouse-steps">${flow.steps.map(step => html`<li>${uiText(step)}</li>`).join("")}</ol></div><div class="warehouse-flow-actions">${button(`data-wh-new="${flow.kind}"`, "plus", "Start request", true)}${button(`data-table="${flow.formId}"`, "table-2", "View documents")}</div></article>`).join("")}</div><div class="section-heading"><h2>Recent stock movements</h2>${button(`data-table="${data().tables.stock}"`, "boxes", "View stock")}</div><div class="table-clip"><table class="data-table"><thead><tr><th>Product</th><th>Direction</th><th>Quantity</th><th>Document</th><th>Operator</th><th>Date</th></tr></thead><tbody>${data().movements.map(m => { const stock = data().stockItems.find(r => r.id === m.stock_id); return html`<tr><td>${reference(data().tables.stock, m.stock_id, stock?.values.name ?? "")}</td><td>${uiText(m.direction)}${m.reversal ? html` · ${uiText("Reversal")}` : ""}</td><td>${esc(m.quantity)} ${esc(stock?.values.unit)}</td><td><button class="record-title" data-wh-document="${m.document_id}">${esc(m.documentNumber)}</button></td><td>${esc(m.actor)}</td><td>${esc(new Date(m.created_at).toLocaleString())}</td></tr>`; }).join("")}</tbody></table>${data().movements.length ? "" : html`<div class="workflow-empty">No stock movements</div>`}</div>` : ""}`;
     if (data().tables.stock) {
-      target.querySelector(".warehouse-flow-list").insertAdjacentHTML("beforebegin", html`<div class="warehouse-catalog-actions">${button('data-wh-catalog="products"', "package-plus", "Product registration")}${button('data-wh-catalog="warehouses"', "warehouse", "Warehouse registration")}${button('data-wh-catalog="stock"', "sliders-horizontal", "Stock settings")}</div>`);
+      if (allowed("editRecords")) target.querySelector(".warehouse-flow-list").insertAdjacentHTML("beforebegin", html`<div class="warehouse-catalog-actions">${button('data-wh-catalog="products"', "package-plus", "Product registration")}${button('data-wh-catalog="warehouses"', "warehouse", "Warehouse registration")}${button('data-wh-catalog="stock"', "sliders-horizontal", "Stock settings")}</div>`);
       target.querySelector(".warehouse-flow-list").insertAdjacentHTML("afterend", html`<div class="section-heading"><h2>Requests</h2></div><div class="table-clip warehouse-request-list"><table class="data-table"><thead><tr><th>Document</th><th>Direction</th><th>Status</th><th>Applicant</th><th>Approver</th><th></th></tr></thead><tbody>${(data().requests ?? []).map(r => html`<tr><td>${esc(r.values.number)}</td><td>${uiText(roleOf(r.formId) === "inbound" ? "In" : "Out")}</td><td>${badge(r.values.status)}</td><td>${esc(r.values.applicant)}</td><td>${esc(r.values.approver)}</td><td>${button(`data-wh-document="${r.id}"`, "workflow", "Open workflow")}</td></tr>`).join("")}</tbody></table>${data().requests?.length ? "" : html`<div class="workflow-empty">No requests yet</div>`}</div>`);
     }
     const setup = target.querySelector("[data-wh-setup]");
@@ -91,6 +92,7 @@ export function initWarehouse({ api, icons, toast, getState, refresh, navigate, 
     icons();
   }
   function openCatalog(role, id) {
+    if (!allowed("editRecords")) { toast("Administrator access is required.", true); return; }
     const form = formFor(role);
     const rows = role === "products" ? data().products : role === "warehouses" ? data().warehouses : data().stockItems;
     const record = rows.find(row => row.id === id);
@@ -158,7 +160,14 @@ export function initWarehouse({ api, icons, toast, getState, refresh, navigate, 
     const role = roleOf(current().form.id);
     const record = current().records.find(r => r.id === id);
     if (!role || (record && canEditRecord(record))) return false;
-    if (!id) { showView("warehouse-flows"); return true; }
+    if (!id) {
+      if (["products", "warehouses"].includes(role) && allowed("editRecords")) {
+        openCatalog(role);
+        return true;
+      }
+      showView("warehouse-flows");
+      return true;
+    }
     if (["inbound", "outbound"].includes(role)) { open(role, id, false); return true; }
     if (["inboundLines", "outboundLines"].includes(role)) { const line = current().records.find(r => r.id === id); if (line) { open(null, line.values.document, false); return true; } }
     if (record) {
@@ -273,6 +282,7 @@ export function initWarehouse({ api, icons, toast, getState, refresh, navigate, 
       if (control.dataset.whDocument) await open(null, control.dataset.whDocument);
       if (busy) return;
       if (control.hasAttribute("data-wh-catalog-save")) {
+        if (!allowed("editRecords")) { toast("Administrator access is required.", true); return; }
         if (!$("warehouse-catalog-form").reportValidity()) return;
         busy = true; control.disabled = true;
         try {

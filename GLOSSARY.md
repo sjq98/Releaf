@@ -9,6 +9,9 @@ Releaf organizes custom operational forms and a fixed warehouse system. UI and A
 **Space**:
 A named collection of forms, navigation nodes, and workflows that belong together. Cross-form operations select forms within the same Space.
 
+**Order Management Space**:
+The independent Space for customer orders, fulfillment, payments and invoices. It is a peer of the Inventory Management System Space; order item descriptions do not reference inventory products or create stock movements.
+
 **Node**:
 A named navigation container that can contain child nodes and forms. It organizes the Space without holding business records of its own.
 
@@ -38,6 +41,18 @@ A configured data-processing task that defines selected inputs, processing instr
 
 **Error Center**:
 The Space's view of failed processing and automation attempts, their causes, and the available correction or retry actions.
+
+### Orders
+
+**Order Review**:
+The operator's verification of a captured customer's order, including the manually entered total amount and fulfillment details. Capture alone does not establish that an order has been reviewed or accepted.
+
+**Payment Confirmation**:
+The confirmation that all money for one order has been received, with the confirming person and time. An unchecked confirmation means receipt has not been confirmed in full, not that no money has been received.
+_Avoid_: Payment transaction, received amount
+
+**Order Invoice**:
+A manually registered invoice associated with an order. It is separate from fulfillment and payment confirmation and does not establish receipt of money.
 
 ### Warehouse
 

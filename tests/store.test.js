@@ -273,7 +273,7 @@ test("validates form names, field counts, names, IDs, rules and dropdown options
     [field("ok", "select", { options: [""] })], [field("ok", "select", { options: ["a".repeat(101)] })],
   ];
   for (const fields of invalid) assert.throws(() => store.createForm({ name: "Invalid", fields }), errorStatus(400));
-  assert.equal(store.listForms().length, 1);
+  assert.equal(store.listForms("default").length, 1);
 });
 
 test("rejects unknown fields and non-object record data", (t) => {
@@ -329,7 +329,7 @@ test("persists forms, records, indexes and activity across reopen", () => {
     const record = create(store, form, { code: "A" });
     store.close();
     store = createStore(filename);
-    assert.equal(store.listForms().length, 2);
+    assert.equal(store.listForms("default").length, 2);
     assert.deepEqual(store.getRecord(record.id), record);
     assert.equal(store.listChanges(form.id).length, 1);
     assert.throws(() => create(store, form, { code: "a" }), errorStatus(409, "code"));

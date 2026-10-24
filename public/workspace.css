@@ -1,5 +1,6 @@
 .space-picker { display: flex; gap: 5px; align-items: center; padding: 12px 14px 6px; }
-.space-picker select { min-width: 0; width: 100%; font-size: 12px; background: transparent; border: 0; font-weight: 600; padding: 8px 0; }
+.space-picker select { flex: 1 1 0; min-width: 0; width: 100%; font-size: 12px; background: transparent; border: 0; font-weight: 600; padding: 8px 0; }
+.space-picker .icon-button { flex-shrink: 0; }
 .tree-tools { display: flex; align-items: center; justify-content: space-between; padding: 8px 17px; }
 .tree-row { display: flex; gap: 2px; align-items: center; min-width: 0; }
 .tree-entry, .tree-row { position: relative; }

@@ -5,7 +5,9 @@ export function createSpaces(db, modules = [], assertFormEditable = () => {}) {
   const migrated = Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'navigation_nodes'").get());
   db.exec(`
     CREATE TABLE IF NOT EXISTS spaces (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-    INSERT OR IGNORE INTO spaces VALUES ('default', 'Inventory Management System');
+    CREATE TABLE IF NOT EXISTS space_deletions (space_id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
+    INSERT OR IGNORE INTO spaces SELECT 'default', 'Inventory Management System'
+      WHERE NOT EXISTS (SELECT 1 FROM space_deletions WHERE space_id = 'default');
     CREATE TABLE IF NOT EXISTS navigation_nodes (
       id TEXT PRIMARY KEY, space_id TEXT NOT NULL REFERENCES spaces(id), parent_id TEXT REFERENCES navigation_nodes(id),
       kind TEXT NOT NULL, name TEXT NOT NULL, form_id TEXT UNIQUE REFERENCES forms(id), position INTEGER NOT NULL DEFAULT 0
@@ -84,6 +86,7 @@ export function createSpaces(db, modules = [], assertFormEditable = () => {}) {
   }
   return {
     get, parent, attach, node, moveNode,
+    wasDeleted: (id) => Boolean(db.prepare("SELECT 1 FROM space_deletions WHERE space_id = ?").get(id)),
     list: () => db.prepare("SELECT * FROM spaces ORDER BY rowid").all(),
     create(value) {
       const id = randomUUID();

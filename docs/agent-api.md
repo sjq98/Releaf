@@ -1,6 +1,6 @@
 # Assistant and Agent API
 
-Warehouse business operations now include atomic request creation/editing, submission, approval/rejection, cancellation, stock posting and reversal. See [the warehouse API contract](warehouse.md). Custom cross-form rule tools have been removed; their archived counterparts cannot execute through this server. Same-form notification rules use `list_notification_rules`, `create_notification_rule`, `update_notification_rule`, `delete_notification_rule` and `/api/notification-rules`.
+Warehouse business operations now include atomic request creation/editing, submission, approval/rejection, cancellation, stock posting and reversal. See [the warehouse API contract](warehouse.md). Orders, payment confirmations and invoices are shared forms; query them with generic read tools and use the order tools below for controlled business writes. Administrator generic edits retain the same invariants. Custom cross-form rule tools have been removed; their archived counterparts cannot execute through this server. Same-form notification rules use `list_notification_rules`, `create_notification_rule`, `update_notification_rule`, `delete_notification_rule` and `/api/notification-rules`.
 
 The seven warehouse tables are read-only to member accounts through generic CRUD/schema tools. Administrator-owned Agents can maintain records and custom fields, but cannot bypass protected core fields, balances, statuses or history. Use `save_inventory_catalog` for product/warehouse/stock settings, and inventory request tools for business documents. Document lines reference **product catalog record IDs**, not stock IDs. Generic custom-form and record writes also require an administrator owner.
 
@@ -8,7 +8,7 @@ The seven warehouse tables are read-only to member accounts through generic CRUD
 
 After signing in, open **Assistant** at the bottom right of any workspace page. Its provider settings are independent of the workspace AI-task provider: as an administrator, open **Assistant provider**, enter the provider name, API base URL and key, fetch models, select one, and save. Members can use the configured assistant but cannot change provider settings. The provider must support OpenAI-compatible `GET /models` and Chat Completions function/tool calling. Model discovery alone does not prove tool support.
 
-The assistant can discover/query tables and use warehouse workflows. Only administrator conversations can mutate generic records, create/edit forms, configure rules/tasks or propose whole-form deletion. It cannot approve its own proposals, change permissions, manage tokens, execute SQL or run arbitrary code. Whole-form deletion always requires local human confirmation, including full access. Warehouse core forms and dependencies are protected. See [deletion contract](form-deletion.md).
+The assistant can discover/query tables and use warehouse and order workflows. It can extract and save a pending order from customer text, but must not treat extraction as human review. AI-imported orders have no amount; a person enters it during review. Each order creates one linked, unchecked payment confirmation. Members manage their own orders and administrators manage all orders. Orders store product details in notes and have no menu or inventory linkage. Generic form/schema mutations remain administrator-only. It cannot approve its own proposals, change permissions, manage tokens, execute SQL or run arbitrary code. Whole-form deletion always requires local human confirmation, including full access. Core system forms and dependencies are protected. See [deletion contract](form-deletion.md) and [order workflow](orders.md).
 
 **Review first** is the default. A write creates a validated preview in **Approvals** without saving business data. The proposal owner or an administrator can choose **Approve** or **Reject**; execution still uses the owner's current role, not the confirming administrator's privileges. The main table refreshes after approval. For a multi-step task, approve the current step, return to Chat, and ask the assistant to continue. It reads the updated action status on the next turn.
 
@@ -16,7 +16,7 @@ The assistant can discover/query tables and use warehouse workflows. Only admini
 
 Previews expire after 24 hours. Confirmation rechecks schema and record versions; schema edits also verify that the table's records have not changed since preview. A stale or invalid approval fails without partially applying. Ask for a new preview. Removing a field hides it from the active schema; the existing store retains historical values.
 
-Conversations and action logs persist in local SQLite and belong to their account. Members can access their own conversations and proposals; administrators can access them across users. The browser remembers a conversation ID, not its credentials. **New conversation** starts a fresh conversation; existing pending approvals remain in the workspace.
+Conversations and action logs persist in local SQLite and belong to their account. Members can access their own conversations and proposals; administrators can inspect them across users, but only the conversation owner can send new messages. This avoids persisting an administrator's private tool results into another user's conversation. The browser remembers a conversation ID, not its credentials. **New conversation** starts a fresh conversation; existing pending approvals remain in the workspace.
 
 The paperclip uploads XLSX/UTF-8 CSV files (5 MB each, at most three attachments per message). Upload stores a Space-scoped source only; matching and workflow writes are separate operations. The model receives verified file IDs, not base64 file bytes. Spreadsheet content is untrusted business data, never a new instruction source.
 
@@ -70,14 +70,81 @@ Writes additionally require `Content-Type: application/json` and a unique `Idemp
 Read the schema first; use stable field IDs in `values` and filters. Reference values must be target record IDs, not their displayed unique labels. Query the target table to resolve them. Schema edits must keep existing field IDs when renaming/reordering fields. Supported field definitions are the same as the manual editor.
 
 Generic form/schema/record writes, navigation changes, notification-rule/task configuration,
-AI result writeback, warehouse setup and error resolution require an administrator
-owner. Members can query, use catalog/document workflows, run/retry/cancel configured AI
+AI result writeback, warehouse setup, catalog maintenance and error resolution require an administrator
+owner. Members can query, use document workflows, run/retry/cancel configured AI
 tasks and mark notifications read. Supplying an unavailable operation directly still
 returns 403; tool filtering is not the only permission check.
 
 Calculated number fields include `formula: { expression, bindings }`; omit their values in writes. The server recalculates them. Write previews include `preview.changes` for the complete atomic operation, including fixed warehouse document/stock changes. The configurable cross-form engine is archived and is not invoked by warehouse workflows. Approval verifies a conservative fingerprint of all form data, notification rules and AI task definitions in the Space; any change requires a fresh preview. Async AI outputs are reviewed separately once inference completes.
 
-The tools endpoint also describes warehouse workflows, navigation, same-form notification rules, AI task configuration/runs and Error Center. Use the generic operations route with each published tool schema. Agents can apply an AI result using a fresh preview fingerprint, under their configured review/full access mode. They cannot approve their own Agent change proposals, edit provider keys or manage access tokens.
+The tools endpoint also describes warehouse and order workflows, navigation, same-form notification rules, AI task configuration/runs and Error Center. Use the generic operations route with each published tool schema. Agents can apply an AI result using a fresh preview fingerprint, under their configured review/full access mode. They cannot approve their own Agent change proposals, edit provider keys or manage access tokens.
+
+### Order Tools
+
+Discover the available order operations through `GET /api/agent/tools` or the
+OpenAPI document. The order tool family is:
+
+| Tool | Behavior |
+| --- | --- |
+| `list_orders` | List orders within the token's Space and the owner's order permissions |
+| `get_order` | Read order notes, review state, paid-in-full confirmation, invoices, history and current version |
+| `parse_customer_order` | Read-only AI extraction from customer text; creates no order |
+| `create_order` | Create an order and its linked unchecked payment record; imported drafts use `reviewed:false,totalAmount:null` |
+| `update_order` | Edit an order using its current version |
+| `transition_order` | Accept, prepare, mark ready, dispatch, complete or cancel |
+| `confirm_order_payment` | Set/revoke the paid-in-full checkbox on explicit operator instruction, using the current order version |
+| `record_order_invoice` | Add an invoice entry with the current order version |
+| `prepare_order_notification` | Prepare a local status message for copying; does not deliver it |
+
+Every existing-order write, including notification preparation, requires the
+current order version. Every write also needs a unique `Idempotency-Key`.
+Review-mode calls create a pending proposal; Full access performs the same
+validated operation immediately. Agent identity is bound to the token owner.
+Members may operate only on their own orders, while administrators may operate
+across users. An Agent cannot use an administrator's privileges merely because
+an administrator later reviews its proposal.
+
+`parse_customer_order` accepts customer text up to 40,000 characters. It is a
+read operation, so it does not require an idempotency key and never creates an
+order. The caller may save its extracted details with `create_order` as an
+unreviewed order with a null amount, subject to the Agent access mode.
+Product requests become notes. The model contract never extracts an amount,
+even when a quoted total appears in the source. An operator later supplies
+`totalAmount` in MYR with at most two decimals and explicitly confirms review.
+No product prices or stock data are consulted.
+
+Order tools are scoped to the Agent token's Space. Resolving an order ID from
+another Space returns an authorization error. Orders have no warehouse action
+and do not change inventory. Status notifications are local text only; no
+WhatsApp messages are sent. There is no partial-payment ledger or
+received/outstanding balance. A customer message, image or Full access is
+never evidence that payment was received. The former `record_order_payment`
+tool is retired. See [orders.md](orders.md) for lifecycle and data semantics.
+
+### WhatsApp Import Tools
+
+The optional [local bridge](whatsapp-bridge.md) exposes administrator-only
+`get_whatsapp_status`, `list_whatsapp_chats`, `preview_whatsapp_import` and
+`import_whatsapp_orders`. Connect and QR linking happen explicitly in the
+order screen, not inside the assistant. A token must belong to
+`order-management`; chat calls also enforce that Space.
+
+Choose one exact chat ID and a read bound (1-50 messages, 1-168 hours). Preview
+classifies inbound text and returns an owner-scoped 30-minute `planId` and
+`fingerprint`; it creates no orders. Import uses those exact values and a new
+idempotency key. Review mode stages the complete import for approval; Full
+access commits it through the same workflow. Replayed message source IDs
+cannot create duplicate orders. Every saved order still needs human review
+and a manually entered amount, and its paid-in-full checkbox starts unchecked.
+
+These tools do not read all chats automatically, process media, send messages,
+connect an e-wallet or register invoices. Selected source messages are sent to
+the configured workspace AI provider. Only use an authorized linked account.
+
+`get_inventory_dashboard` reads the same monthly trends, current low-stock alerts and
+reconciled reports as the UI. Optional arguments are `spaceId`, `from`/`to` (inclusive
+YYYY-MM, up to 24 months), `warehouseId`, `productId` and `unit`. It is read-only,
+available to members, and enforces the token's Space. See [dashboard calculations](inventory-dashboard.md).
 
 ### Spreadsheet Batch Sequence
 

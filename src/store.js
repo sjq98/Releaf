@@ -8,6 +8,7 @@ import { MODULES } from "./modules.js";
 import { createAgentRepository } from "./agent-repository.js";
 import { createImportDrafts } from "./import-drafts.js";
 import { createFormDeletion } from "./form-deletion.js";
+import { createSpaceDeletion } from "./space-deletion.js";
 import { createSpaces } from "./spaces.js";
 import { calculateFields, validateFieldFormulas } from "./expressions.js";
 import { createAutomation } from "./automation.js";
@@ -15,6 +16,9 @@ import { createAttachments } from "./attachments.js";
 import { createAITasks } from "./ai-tasks.js";
 import { createWarehouseSystem } from "./warehouse-system.js";
 import { createWarehouseImport } from "./warehouse-import.js";
+import { createWarehouseDashboard } from "./warehouse-dashboard.js";
+import { createMeetingTasks } from "./meeting-tasks.js";
+import { createOrderSystem } from "./order-system.js";
 import { createAuth } from "./auth.js";
 
 export { AppError, FIELD_TYPES };
@@ -80,14 +84,19 @@ export function createStore(filename) {
     db.exec("ALTER TABLE forms ADD COLUMN deleted_at TEXT");
   }
   const imports = createImportDrafts(db);
-  if (db.prepare("SELECT COUNT(*) AS count FROM forms").get().count === 0) {
+  const hasSpaces = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spaces'").get());
+  if (!hasSpaces && db.prepare("SELECT COUNT(*) AS count FROM forms").get().count === 0) {
     const now = new Date().toISOString();
     db.prepare("INSERT INTO forms (id, name, fields_json, created_at, updated_at, module_id) VALUES (?, ?, ?, ?, ?, 'custom')").run(
       randomUUID(), "New form", JSON.stringify(DEFAULT_FIELDS), now, now,
     );
   }
-  let automation, warehouse;
-  const spaces = createSpaces(db, [], id => warehouse?.assertSchema(getForm(id)));
+  let automation, warehouse, orders;
+  const spaces = createSpaces(db, [], id => {
+    const form = getForm(id);
+    warehouse?.assertSchema(form);
+    orders?.assertSchema(form);
+  });
   let previewDepth = 0;
 
   let transactionDepth = 0;
@@ -136,7 +145,7 @@ export function createStore(filename) {
   }
 
   function parseForm(row) {
-    return { id: row.id, name: row.name, spaceId: row.space_id, moduleId: row.module_id, fields: JSON.parse(row.fields_json), version: row.version, createdAt: row.created_at, updatedAt: row.updated_at, readOnly: Boolean(warehouse?.roleOf(row.id)) && auth.currentUser()?.role !== "admin" };
+    return { id: row.id, name: row.name, spaceId: row.space_id, moduleId: row.module_id, fields: JSON.parse(row.fields_json), version: row.version, createdAt: row.created_at, updatedAt: row.updated_at, readOnly: Boolean(warehouse?.roleOf(row.id) || orders?.roleOf(row.id)) && auth.currentUser()?.role !== "admin" };
   }
 
   function getForm(id) {
@@ -147,7 +156,8 @@ export function createStore(filename) {
 
   function listForms(spaceId) {
     return db.prepare("SELECT * FROM forms WHERE deleted_at IS NULL ORDER BY created_at, rowid").all().map((row) => ({
-      ...parseForm(row), recordCount: db.prepare("SELECT COUNT(*) AS count FROM records WHERE form_id = ? AND deleted_at IS NULL").get(row.id).count,
+      ...parseForm(row), recordCount: orders?.roleOf(row.id) ? listRecords(row.id).length
+        : db.prepare("SELECT COUNT(*) AS count FROM records WHERE form_id = ? AND deleted_at IS NULL").get(row.id).count,
     })).filter((form) => !spaceId || form.spaceId === spaceId);
   }
 
@@ -178,12 +188,15 @@ export function createStore(filename) {
     const row = db.prepare("SELECT * FROM records WHERE id = ? AND deleted_at IS NULL").get(id);
     if (!row) throw new AppError(404, "This record has been deleted or does not exist.");
     getForm(row.form_id);
-    return parseRecord(row);
+    const record = parseRecord(row);
+    if (orders && !orders.isVisible(record.formId, record.values)) throw new AppError(404, "This record has been deleted or does not exist.");
+    return record;
   }
 
   function listRecords(formId) {
     getForm(formId);
-    return db.prepare("SELECT * FROM records WHERE form_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC").all(formId).map(parseRecord);
+    return db.prepare("SELECT * FROM records WHERE form_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC").all(formId)
+      .map(parseRecord).filter(record => !orders || orders.isVisible(formId, record.values));
   }
 
   function validateReferences(fields, formId = null, spaceId = "default") {
@@ -220,7 +233,7 @@ export function createStore(filename) {
 
   function referenceCatalog(spaceId) {
     return listForms(spaceId).map((form) => ({
-      id: form.id, name: form.name,
+      id: form.id, name: form.name, spaceId: form.spaceId,
       fields: form.fields.filter((field) => field.unique && field.type !== "reference"),
       records: listRecords(form.id).map((record) => ({
         id: record.id,
@@ -251,6 +264,8 @@ export function createStore(filename) {
       const fields = validateFields(body.fields);
       validateFieldFormulas(fields);
       api.warehouse.assertSchema(form, fields);
+      api.meetings?.assertSchema(form, fields);
+      api.orders?.assertSchema(form, fields);
       validateReferences(fields, id, form.spaceId);
       automation.assertSchema(form, fields);
       api.tasks?.assertSchema(form, fields);
@@ -267,6 +282,7 @@ export function createStore(filename) {
         try {
           const values = calculateFields(fields, normalizeValues({}, fields, record.values), records);
           api.warehouse.validateRecord({ ...form, fields }, record, values, record.id);
+          api.orders?.validateRecord({ ...form, fields }, record, values, record.id);
           validateReferenceValues(fields, values, form.spaceId);
           for (const { form: source, field: reference } of inboundReferences(id)) {
             const value = values[reference.reference.fieldId];
@@ -324,13 +340,15 @@ export function createStore(filename) {
   }
 
   function computed(form, input, previous, id, creating = false) {
-    if (!api.warehouse.roleOf(form.id)) auth.requireAdmin();
-    const prepared = api.warehouse.prepare(form, input, previous, id, creating);
+    const owner = api.orders?.roleOf(form.id) ? api.orders : api.warehouse.roleOf(form.id) ? api.warehouse : null;
+    if (!owner) auth.requireAdmin();
+    const prepared = owner ? owner.prepare(form, input, previous, id, creating) : input;
     const values = normalizeValues(prepared, form.fields, previous, creating);
     const records = listRecords(form.id).filter((row) => row.id !== id);
     records.push({ id, values });
     const calculated = calculateFields(form.fields, values, records);
     api.warehouse.validateRecord(form, creating ? null : { id, values: previous }, calculated, id);
+    api.orders?.validateRecord(form, creating ? null : { id, values: previous }, calculated, id);
     return calculated;
   }
 
@@ -342,6 +360,7 @@ export function createStore(filename) {
       if (form.fields.every((field) => JSON.stringify(values[field.id]) === JSON.stringify(record.values[field.id]))) continue;
       validateReferenceValues(form.fields, values, form.spaceId);
       api.warehouse.validateRecord(form, record, values, record.id);
+      api.orders?.validateRecord(form, record, values, record.id);
       writeUniqueValues(form.id, record.id, form.fields, values);
       const now = new Date().toISOString();
       db.prepare("UPDATE records SET values_json = ?, version = version + 1, updated_at = ? WHERE id = ?").run(JSON.stringify(values), now, record.id);
@@ -361,6 +380,7 @@ export function createStore(filename) {
       writeUniqueValues(formId, id, form.fields, values);
       const record = getRecord(id);
       api.warehouse.afterWrite(form, record, "created");
+      api.orders?.afterWrite(form, record, "created");
       recordChange(form, record, "created", {}, values, now);
       recalculateAggregates(form, id);
       return { record, changed: true, effects: automation.changes() };
@@ -389,6 +409,7 @@ export function createStore(filename) {
       db.prepare("UPDATE records SET values_json = ?, updated_at = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(values), now, id);
       const record = getRecord(id);
       api.warehouse.afterWrite(form, record, "updated", previous);
+      api.orders?.afterWrite(form, record, "updated", previous);
       recordChange(form, record, "updated", previous.values, values, now);
       recalculateAggregates(form, id);
       return { record, changed: true, effects: automation.changes() };
@@ -399,9 +420,10 @@ export function createStore(filename) {
     return operation({ operation: "delete_record", recordId: id, formId: getRecord(id).formId, body }, () => {
       const record = getRecord(id);
       const form = getForm(record.formId);
-      if (!api.warehouse.roleOf(form.id)) auth.requireAdmin();
+      if (!api.warehouse.roleOf(form.id) && !api.orders?.roleOf(form.id)) auth.requireAdmin();
       if (body?.version !== record.version) throw new AppError(409, "This record was changed in another window. Refresh and try again.");
       api.warehouse.assertDelete(record);
+      api.orders?.assertDelete(record);
       for (const { form: source, field } of inboundReferences(form.id)) {
         if (listRecords(source.id).some((row) => row.values[field.id] === id)) {
           throw new AppError(409, `This record is referenced by "${source.name}". Remove its references before deleting it.`);
@@ -411,6 +433,7 @@ export function createStore(filename) {
       db.prepare("UPDATE records SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?").run(now, now, id);
       db.prepare("DELETE FROM unique_values WHERE record_id = ?").run(id);
       api.warehouse.afterWrite(form, record, "deleted");
+      api.orders?.afterWrite(form, record, "deleted");
       recordChange(form, record, "deleted", record.values, {}, now);
       recalculateAggregates(form);
       return { id, effects: automation.changes() };
@@ -419,20 +442,28 @@ export function createStore(filename) {
 
   function listChanges(formId) {
     getForm(formId);
-    return db.prepare("SELECT * FROM form_activity WHERE form_id = ? ORDER BY created_at DESC, rowid DESC").all(formId).map((row) => ({
+    return db.prepare("SELECT * FROM form_activity WHERE form_id = ? ORDER BY created_at DESC, rowid DESC").all(formId).filter(row => {
+      if (!orders?.roleOf(formId)) return true;
+      const record = db.prepare("SELECT values_json FROM records WHERE id = ?").get(row.record_id);
+      return Boolean(record && orders.isVisible(formId, JSON.parse(record.values_json)));
+    }).map((row) => ({
       id: row.id, recordId: row.record_id, recordTitle: row.record_title,
       kind: row.kind, diff: JSON.parse(row.diff_json), createdAt: row.created_at,
     }));
   }
 
   function bootstrap(formId, requestedSpace = "default") {
-    const spaceId = formId ? getForm(formId).spaceId : spaces.get(requestedSpace).id;
+    const available = spaces.list();
+    const spaceId = formId ? getForm(formId).spaceId
+      : (available.find(space => space.id === requestedSpace) ?? available.find(space => space.id === "default") ?? available[0]).id;
     const forms = listForms(spaceId);
     const form = formId || forms[0] ? getForm(formId || forms[0].id) : null;
     return { forms, form, records: form ? listRecords(form.id) : [], changes: form ? listChanges(form.id) : [], fieldTypes: FIELD_TYPES, modules: MODULES,
       space: spaces.get(spaceId), spaces: spaces.list(), navigation: spaces.tree(spaceId),
       references: referenceCatalog(spaceId),
       warehouse: api.warehouse.state(spaceId),
+      meetingTasks: api.meetings.state(spaceId),
+      orders: api.orders.state(spaceId),
       errorCount: automation.errors(spaceId).filter((error) => error.status === "Unresolved").length,
       notifications: automation.notifications(spaceId) };
   }
@@ -461,6 +492,11 @@ export function createStore(filename) {
   api.database = db;
   api.warehouse.migrate();
   api.warehouseImports = createWarehouseImport({ db, store: api });
+  api.warehouseDashboard = createWarehouseDashboard({ db, store: api });
+  api.meetings = createMeetingTasks({ db, store: api });
+  api.orders = orders = createOrderSystem({ db, store: api });
+  api.orders.migrate();
+  api.spaceDeletions = createSpaceDeletion({ db, store: api });
   api.formulaPreview = (body) => {
     const form = getForm(body.formId);
     const fields = validateFields(body.fields ?? form.fields).map((field) => ({ ...field, required: false }));

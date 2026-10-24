@@ -17,6 +17,8 @@ export function createFormDeletion({ db, store }) {
   function inspect(id) {
     const form = store.getForm(id), blockers = [];
     if (store.warehouse.roleOf(id)) blockers.push({ type: "system", name: form.name });
+    if (store.meetings?.isTaskForm(id)) blockers.push({ type: "system", name: form.name });
+    if (store.orders?.roleOf(id)) blockers.push({ type: "system", name: form.name });
     for (const source of store.listForms(form.spaceId).filter(item => item.id !== id)) {
       for (const field of source.fields.filter(field => referencesForm(field.reference, id) || referencesForm(field.formula, id))) {
         blockers.push({ type: "reference", formId: source.id, name: source.name, field: field.name });

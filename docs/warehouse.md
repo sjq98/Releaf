@@ -15,8 +15,8 @@ The fixed warehouse workflow does not call the archived configurable cross-form 
 The first visit creates an administrator; there is no default password, and passwords
 must contain at least 12 characters. Administrators manage accounts under **Account >
 Manage users**, including role changes, disabling and password resets. Members read
-shared tables and use catalog/document workflows; only administrators set up the
-module or edit table definitions, generic records, navigation and settings. Sessions
+shared tables and inventory analysis and use document workflows; only administrators
+maintain catalogs, set up the module or edit table definitions, generic records, navigation and settings. Sessions
 last seven days, and password/role/active-status changes invalidate existing sessions.
 
 New requests bind the applicant to the signed-in username. Editing a request preserves
@@ -36,23 +36,25 @@ Administrator setup adds a navigation tree and seven forms in the selected Space
 
 | Table | Purpose |
 | --- | --- |
-| 商品表 | Unique product code, name, pictures, category, specification, unit, notes and active flag |
-| 库存表 | Product reference + warehouse reference, current/opening quantity and minimum; catalog details are derived |
-| 入库单 | Inbound request header, approver and workflow state |
-| 入库明细 | Product, quantity and remarks, linked to an inbound header |
-| 出库单 | Outbound request header, approver and workflow state |
-| 出库明细 | Product, quantity and remarks, linked to an outbound header |
-| 仓库信息 | Warehouse codes, names, locations and managers |
+| Products | Unique product code, name, pictures, category, specification, unit, notes and active flag |
+| Stock | Product reference + warehouse reference, current/opening quantity and minimum; catalog details are derived |
+| Inbound Requests | Inbound request header, approver and workflow state |
+| Inbound Request Lines | Product, quantity and remarks, linked to an inbound header |
+| Outbound Requests | Outbound request header, approver and workflow state |
+| Outbound Request Lines | Product, quantity and remarks, linked to an outbound header |
+| Warehouses | Warehouse codes, names, locations and managers |
 
 Setup is idempotent. It creates one default warehouse, no sample products or movements. Custom tables remain unchanged. Legacy Materials/Recipes logic is retired; only this warehouse system posts current stock.
 
-Stock identity is product + warehouse, represented by a managed unique stockKey. Both detail tables reference 商品表, not 库存表. Each detail also references its corresponding document; documents and stock reference 仓库信息. References store stable record IDs, not labels. Product code and unit cannot change once referenced. Opening quantity/product/warehouse cannot change after a movement exists. Catalog name/image/category/specification edits propagate to stock display fields.
+Stock identity is product + warehouse, represented by a managed unique stockKey. Both detail tables reference Products, not Stock. Each detail also references its corresponding document; documents and stock reference Warehouses. References store stable record IDs, not labels. Product code and unit cannot change once referenced. Opening quantity/product/warehouse cannot change after a movement exists. Catalog name/image/category/specification edits propagate to stock display fields.
+
+Warehouse form, field and navigation names default to English. Startup translates the original Chinese labels in existing warehouse forms and their navigation ancestors. It preserves field/form IDs, constraints, references, record values and movement history, and leaves unrelated forms and custom labels unchanged. Repeated startup does not increment already migrated form versions. Business names stay English when switching the interface language.
 
 Upgrades automatically add the product catalog and migrate active stock/line references transactionally, preserving stock IDs, balances, documents and movement history. Conflicting details for the same code abort migration instead of silently merging different products. Back up the SQLite database before upgrading.
 
 ## User workflow
 
-1. Open 出入库流程. Use 商品登记与维护 to register products and 仓库登记与维护 for warehouses. 库存初始化与阈值 sets opening quantities and minimum stock. These are immediate catalog maintenance workflows, not approval documents.
+1. As an administrator, open 出入库流程. Use 商品登记与维护 to register products and 仓库登记与维护 for warehouses. 库存初始化与阈值 sets opening quantities and minimum stock. These are immediate administrator-only catalog maintenance workflows, not approval documents.
 2. Start 入库流程 or 出库审批. Choose a warehouse and active approver account; the applicant is the signed-in user. Select products from the catalog or import product lines. Products do not need a pre-existing stock row. First inbound posting creates it with zero opening stock; missing outbound stock is rejected.
 3. Save a draft, or submit. Submission creates Pending approval and does not change stock.
 4. The assigned approver signs in to approve or reject. Rejection requires a reason and allows correction/resubmission. Approval still does not change stock.
@@ -83,11 +85,12 @@ Limits: XLSX/CSV only (not legacy XLS), 5 MB, 1,000 data rows, 20 requests and 1
 
 ## Shared API
 
-UI routes require a login session and local Host/origin checks. Setup and generic table/schema mutations require an administrator; catalog/document workflows are available to members subject to the business rules above:
+UI routes require a login session and local Host/origin checks. Setup, catalog maintenance and generic table/schema mutations require an administrator; document workflows are available to members subject to the business rules above:
 
 | Route | Purpose |
 | --- | --- |
 | GET /api/warehouse?spaceId=... | Tables, products, warehouses, workflows and latest movements |
+| GET /api/warehouse/dashboard?spaceId=... | Read-only trends, live stock alerts and monthly reports; see [dashboard filters and formulas](inventory-dashboard.md) |
 | POST /api/warehouse/setup | Install the module in a Space |
 | POST /api/warehouse/catalog | Register/update products, warehouses or stock settings; updates need recordId/version |
 | POST /api/warehouse/files | Upload `{spaceId?,file:{name,data:base64}}`; no business writes |
@@ -103,7 +106,7 @@ UI routes require a login session and local Host/origin checks. Setup and generi
 
 External integrations call `/api/agent/operations` with a Bearer token and Idempotency-Key. Discover tools via `/api/agent/tools` or `/api/agent/openapi.json`.
 
-Warehouse tools: `setup_inventory_workspace`, `get_inventory_workspace`, `save_inventory_catalog`, `get_inventory_request`, `create_inventory_request`, `update_inventory_request`, `advance_inventory_request`. General queries work on warehouse forms. Generic record CRUD and schema tools require an administrator owner and still enforce warehouse field/state constraints; setup also requires an administrator. `upload_attachment` / `get_attachment` handle pictures and evidence. Spreadsheet tools are `upload_inventory_file`, `get_inventory_file`, `match_inventory_file`, `preview_inventory_import`, `execute_inventory_import`. External clients can upload through `POST /api/agent/files` using their Bearer token, or the upload tool; transport uploads do not require Agent business-change approval.
+Warehouse tools: `setup_inventory_workspace`, `get_inventory_workspace`, `get_inventory_dashboard`, `save_inventory_catalog`, `get_inventory_request`, `create_inventory_request`, `update_inventory_request`, `advance_inventory_request`. General queries work on warehouse forms. Generic record CRUD and schema tools require an administrator owner and still enforce warehouse field/state constraints; setup and catalog maintenance also require an administrator. `upload_attachment` / `get_attachment` handle pictures and evidence. Spreadsheet tools are `upload_inventory_file`, `get_inventory_file`, `match_inventory_file`, `preview_inventory_import`, `execute_inventory_import`. External clients can upload through `POST /api/agent/files` using their Bearer token, or the upload tool; transport uploads do not require Agent business-change approval.
 
 The floating assistant's paperclip accepts up to three spreadsheet attachments per message. Files are stored in the selected Space; the model receives verified file IDs and filenames and uses tools to read/match them. Upload alone does not start a workflow. Business writes follow Review first / Full access exactly as other Agent tools.
 

@@ -5,16 +5,22 @@ import { initAISettings } from "/ai-settings.js";
 import { initAssistant } from "/assistant.js";
 import { initTableImport } from "/table-import.js";
 import { initFormDeletion } from "/form-deletion.js";
+import { initSpaceDeletion } from "/space-deletion.js";
 import { initWarehouse } from "/warehouse.js";
+import { initInventoryDashboard } from "/inventory-dashboard.js";
+import { initMeetingTasks } from "/meeting-tasks.js";
+import { initOrders } from "/orders.js";
 import { initWorkspace, initAttachments } from "/workspace.js";
 import { initAuth } from "/auth.js";
+import { initTablePan } from "/table-pan.js";
 const KIND_LABELS = { created: "Record created", updated: "Record updated", deleted: "Record deleted" };
 initI18n();
+const tablePan = initTablePan();
 const state = {
   form: null, forms: [], records: [], changes: [], view: "records", search: "", historySearch: "", historyKind: "all",
   draft: null, editing: null, deleting: null, busy: false, builderBusy: false, pendingAction: null, loadNumber: 0,
   modules: [], references: [], ai: {}, user: null, permissions: {},
-  warehouse: { tables: {}, managedFields: {} }, spaces: [], space: null, navigation: [], errorCount: 0, notifications: [],
+  warehouse: { tables: {}, managedFields: {} }, meetingTasks: {}, orders: {}, spaces: [], space: null, navigation: [], errorCount: 0, notifications: [],
 };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -25,7 +31,18 @@ const count = (n, singular, plural = singular + "s") => `${n} ${n === 1 ? singul
 const dirty = () => state.draft && state.form && JSON.stringify({ name: state.draft.name, fields: state.draft.fields }) !== JSON.stringify({ name: state.form.name, fields: state.form.fields });
 let auth, authGeneration = 0;
 const can = permission => Boolean(state.user && state.permissions[permission]);
-const coreField = id => (state.warehouse.coreFields?.[warehouse.roleOf(state.form?.id)] ?? []).includes(id);
+const orderRole = id => Object.entries(state.orders.tables ?? {}).find(([, formId]) => formId === id)?.[0];
+const canDeleteRecord = record => {
+  if (!can("editRecords")) return false;
+  const role = orderRole(record.formId);
+  if (role === "payments") return false;
+  if (role === "invoices") return true;
+  if (role === "orders") return Boolean(state.orders.orders?.find(order => order.id === record.id)?.canDelete);
+  return warehouse.canDelete(record);
+};
+const coreField = id => (state.warehouse.coreFields?.[warehouse.roleOf(state.form?.id)] ?? []).includes(id) ||
+  (state.orders.coreFields?.[orderRole(state.form?.id)] ?? []).includes(id) ||
+  state.form?.id === state.meetingTasks.formId && (state.meetingTasks.coreFields ?? []).includes(id);
 
 function toast(message, error = false) {
   const node = document.createElement("div");
@@ -67,9 +84,13 @@ async function api(path, options = {}) {
 }
 
 const warehouse = initWarehouse({ api, icons, toast, getState: () => state, refresh, navigate: navigateTable, showView: renderView });
+const inventoryDashboard = initInventoryDashboard({ api, icons, toast, getState: () => state, showView: renderView });
+const meetingTasks = initMeetingTasks({ api, icons, toast, getState: () => state, refresh, navigate: navigateTable });
+const orders = initOrders({ api, icons, toast, getState: () => state, navigate: navigateTable });
 
 const aiSettings = initAISettings({ api, icons, canManage: () => can("manageSettings"), onSaved(settings) {
   state.ai = settings;
+  meetingTasks.updateSettings();
   toast("AI settings saved.");
 } });
 const assistant = initAssistant({ api, icons, onChanged: refresh, getState: () => state });
@@ -82,29 +103,38 @@ const formDeletion = initFormDeletion({ api, icons, toast, async onDeleted(id) {
     renderView("records");
   } else await refresh();
 } });
+const spaceDeletion = initSpaceDeletion({ api, icons, toast, async onDeleted(result) {
+  $("builder-dialog").close(); $("record-dialog").close();
+  state.draft = null; state.editing = null; state.deleting = null;
+  await load(null, false, result.nextSpaceId);
+  renderView(state.orders.enabled ? "orders" : state.meetingTasks.enabled ? "meeting-tasks" : "records");
+} });
 const workspace = initWorkspace({ api, icons, toast, getState: () => state, refresh, navigate: navigateTable, showView: renderView, getDraft: () => state.draft, onDraftChanged: renderBuilder,
-  deleteForm: id => { if (can("manageForms")) guardDraft(() => formDeletion.open(id)); } });
+  deleteForm: id => { if (can("manageForms")) guardDraft(() => formDeletion.open(id)); },
+  deleteSpace: id => { if (can("manageForms")) guardDraft(() => spaceDeletion.open(id)); } });
 initAttachments({ api, getState: () => state, toast, icons });
 const initial = new URLSearchParams(location.search);
-const initialView = ["records", "activity", "warehouse-flows", "notifications-rules", "ai-tasks", "errors"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "records";
+const initialView = ["records", "activity", "warehouse-flows", "inventory-dashboard", "meeting-tasks", "orders", "notifications-rules", "ai-tasks", "errors"].includes(location.hash.slice(1)) ? location.hash.slice(1) : null;
 auth = initAuth({ api, icons,
   async onAuthenticated(session) {
     state.user = session.user; state.permissions = session.permissions || {};
-    await load(initial.get("formId"));
+    await load(initialView === "orders" && !initial.has("spaceId") ? null : initial.get("formId"), false,
+      initial.get("spaceId") ?? (initialView === "orders" ? "order-management" : "default"));
     if (!state.user) return;
-    renderView(initialView);
+    renderView(initialView ?? (state.orders.enabled ? "orders" : state.meetingTasks.enabled ? "meeting-tasks" : "inventory-dashboard"));
     if (initial.get("recordId")) openRecord(initial.get("recordId"));
   },
   onSignedOut() {
+    tablePan.reset();
     authGeneration++;
     ++state.loadNumber; ++formulaPreviewVersion; clearTimeout(formulaPreviewTimer);
     state.user = null; state.permissions = {}; state.form = null; state.forms = []; state.records = []; state.changes = [];
     state.draft = null; state.editing = null; state.deleting = null; state.pendingAction = null;
     state.busy = false; state.builderBusy = false;
     state.spaces = []; state.space = null; state.navigation = []; state.references = []; state.notifications = []; state.modules = [];
-    state.ai = {}; state.warehouse = { tables: {}, managedFields: {} }; state.search = ""; state.historySearch = "";
+    state.ai = {}; state.warehouse = { tables: {}, managedFields: {} }; state.meetingTasks = {}; state.orders = {}; state.search = ""; state.historySearch = "";
     $("submit-new-form").disabled = false; $("confirm-delete").disabled = false;
-    aiSettings.reset(); assistant.reset(); spreadsheetImport.reset(); formDeletion.reset(); workspace.reset?.(); warehouse.reset?.();
+    aiSettings.reset(); assistant.reset(); spreadsheetImport.reset(); formDeletion.reset(); spaceDeletion.reset(); workspace.reset?.(); warehouse.reset?.(); inventoryDashboard.reset(); meetingTasks.reset(); orders.reset();
     for (const id of ["record-rows", "record-columns", "history-list", "module-navigation", "builder-fields", "record-fields", "preview-fields", "toast-region", "view-warehouse-flows", "view-notifications-rules", "view-ai-tasks", "view-errors"]) $(id).replaceChildren();
     $("record-search").value = ""; $("history-search").value = ""; $("notice").hidden = true;
   },
@@ -132,8 +162,23 @@ function renderRecords() {
   $("workspace-empty").hidden = Boolean(state.form);
   if (!state.form) return;
   const role = warehouse.roleOf(state.form.id);
+  const orderTableRole = orderRole(state.form.id);
   const fields = state.form.fields.filter(field => !(role === "stock" && field.id === "stockKey"));
   warehouse.renderToolbar();
+  if (orderTableRole) {
+    $("delete-table").hidden = true;
+    $("create-record").hidden = true;
+    $("import-spreadsheet").hidden = true;
+  }
+  let orderToolbar = $("order-table-toolbar");
+  if (!orderToolbar) {
+    orderToolbar = document.createElement("div");
+    orderToolbar.id = "order-table-toolbar";
+    orderToolbar.className = "order-table-toolbar";
+    $("record-table-wrap").before(orderToolbar);
+  }
+  orderToolbar.hidden = !orderTableRole;
+  if (orderTableRole) orderToolbar.innerHTML = html`<button type="button" class="button button-secondary" data-open-order-workflows>${icon("workflow")}<span>Order workflows</span></button>`;
   const query = state.search.trim().toLowerCase();
   const records = warehouse.filter(state.records).filter((record) => !query || fields.some((field) => displayValue(field, record.values[field.id]).toLowerCase().includes(query)));
   $("metric-total").textContent = state.records.length;
@@ -147,11 +192,12 @@ function renderRecords() {
     const value = record.values[field.id];
     const content = warehouse.cell(field, value, record) ?? renderFieldCell(field, value, { catalog: state.references, primary: index === 0, recordId: record.id });
     return html`<td>${content}</td>`;
-  }).join("")}<td class="updated-cell">${esc(formatTimestamp(record.updatedAt))}</td><td><div class="row-actions"><button class="icon-button" data-edit="${record.id}" title="${warehouse.canEditRecord(record) ? "Edit record" : "View record"}" aria-label="${warehouse.canEditRecord(record) ? "Edit" : "View"} ${esc(recordTitle(record))}">${icon(warehouse.canEditRecord(record) ? "pencil" : "eye")}</button><button ${can("editRecords") && warehouse.canDelete(record) ? "" : "hidden"} class="icon-button action-delete" data-delete="${record.id}" title="Delete record" aria-label="Delete ${esc(recordTitle(record))}">${icon("trash-2")}</button></div></td></tr>`).join("");
+  }).join("")}<td class="updated-cell">${esc(formatTimestamp(record.updatedAt))}</td><td><div class="row-actions">${orderTableRole ? html`<button type="button" class="icon-button" data-order-workflow="${orderTableRole === "orders" ? record.id : esc(record.values.order)}" ${uiAttributes("Open workflow")}>${icon("workflow")}</button>` : ""}<button class="icon-button" data-edit="${record.id}" title="${warehouse.canEditRecord(record) ? "Edit record" : "View record"}" aria-label="${warehouse.canEditRecord(record) ? "Edit" : "View"} ${esc(recordTitle(record))}">${icon(warehouse.canEditRecord(record) ? "pencil" : "eye")}</button><button ${canDeleteRecord(record) ? "" : "hidden"} class="icon-button action-delete" data-delete="${record.id}" title="Delete record" aria-label="Delete ${esc(recordTitle(record))}">${icon("trash-2")}</button></div></td></tr>`).join("");
   $("records-empty").hidden = records.length > 0;
   $("record-table-wrap").classList.toggle("has-empty", !records.length);
   setUIText($("empty-title"), state.records.length ? "No matching records" : "No records yet");
-  $("empty-create").hidden = !can("editRecords") || Boolean(role) || state.records.length > 0;
+  const catalogRole = ["products", "warehouses"].includes(role);
+  $("empty-create").hidden = !can("editRecords") || Boolean(orderTableRole) || (role && !catalogRole) || state.records.length > 0;
   $("empty-new-form").hidden = !can("manageForms");
   icons();
 }
@@ -171,7 +217,7 @@ function renderActivity() {
 function renderBuilder() {
   if (!state.draft) return;
   $("form-name").value = state.draft.name;
-  $("builder-fields").innerHTML = `${state.draft.fields.some(field => coreField(field.id)) ? html`<p class="builder-core-note">Warehouse core fields keep their types and validation rules. You can rename and reorder them, and add custom fields.</p>` : ""}` + state.draft.fields.map((field, index) => html`<div class="builder-field" data-field-id="${field.id}">
+  $("builder-fields").innerHTML = `${state.draft.fields.some(field => coreField(field.id)) ? html`<p class="builder-core-note">${uiText(orderRole(state.form.id) ? "Order core fields keep their types and validation rules. You can rename and reorder them, and add custom fields." : state.form.id === state.meetingTasks.formId ? "Meeting task core fields keep their types and validation rules. You can rename and reorder them, and add custom fields." : "Warehouse core fields keep their types and validation rules. You can rename and reorder them, and add custom fields.")}</p>` : ""}` + state.draft.fields.map((field, index) => html`<div class="builder-field" data-field-id="${field.id}">
     <div class="builder-field-main">
       <div class="builder-name"><span class="field-type-icon">${icon(TYPES[field.type].icon)}</span><input data-prop="name" value="${esc(field.name)}" maxlength="64" aria-label="Field ${index + 1} name" placeholder="Field name"></div>
       <select data-prop="type" ${coreField(field.id) ? "data-core-lock" : ""} aria-label="Field ${index + 1} type">${Object.entries(TYPES).map(([type, info]) => html`<option value="${type}"${type === field.type ? " selected" : ""}>${uiText(info.label)}</option>`).join("")}</select>
@@ -210,25 +256,35 @@ function builderStatus() {
 
 function renderView(view) {
   if (!state.user) return;
+  tablePan.reset();
   if (view === "automations") view = "warehouse-flows";
+  if (view === "orders" && !state.orders.enabled) view = state.meetingTasks.enabled ? "meeting-tasks" : "inventory-dashboard";
+  if (view === "meeting-tasks" && !state.meetingTasks.enabled) view = "records";
+  if (state.meetingTasks.enabled && ["warehouse-flows", "inventory-dashboard", "orders"].includes(view)) view = "meeting-tasks";
+  if (state.orders.enabled && ["warehouse-flows", "inventory-dashboard", "meeting-tasks"].includes(view)) view = "orders";
   if (view === "notifications-rules" && !can("manageForms")) view = "records";
   if (!state.form && ["activity", "notifications-rules"].includes(view)) view = "records";
   state.view = view;
   document.querySelectorAll(".page-view").forEach((section) => { section.hidden = section.id !== `view-${view}`; });
-  document.querySelectorAll("[data-view]").forEach((button) => {
-    const current = button.dataset.view === view;
+  document.querySelectorAll("[data-view], [data-workspace-view]").forEach((button) => {
+    const current = (button.dataset.view ?? button.dataset.workspaceView) === view;
     button.classList.toggle("is-active", current);
     if (current) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  setUIText($("breadcrumb-current"), { records: "Records", activity: "Activity", "notifications-rules": "Notification rules", "warehouse-flows": "Warehouse workflows", "ai-tasks": "AI tasks", errors: "Error Center" }[view]);
+  setUIText($("breadcrumb-current"), { records: "Records", activity: "Activity", "notifications-rules": "Notification rules", "warehouse-flows": "Warehouse workflows", "inventory-dashboard": "Inventory analysis", "meeting-tasks": "Meeting to tasks", orders: "Order management", "ai-tasks": "AI tasks", errors: "Error Center" }[view]);
+  $("breadcrumb-form").textContent = ["records", "activity", "notifications-rules"].includes(view) ? state.form?.name ?? state.space.name : state.space.name;
   history.replaceState(null, "", `#${view}`);
   renderSidebar();
   warehouse.enter(view);
+  inventoryDashboard.enter(view);
+  meetingTasks.enter(view);
+  orders.enter(view);
   if (state.space) workspace.enter(view);
 }
 
 async function load(formId = state.form?.id, preserveDraft = false, spaceId = state.space?.id ?? new URLSearchParams(location.search).get("spaceId") ?? "default") {
+  if (state.space?.id !== spaceId) orders.reset();
   const requestNumber = ++state.loadNumber;
   const params = new URLSearchParams({ spaceId });
   if (formId) params.set("formId", formId);
@@ -252,6 +308,8 @@ async function load(formId = state.form?.id, preserveDraft = false, spaceId = st
   state.changes = data.changes;
   state.modules = data.modules; state.references = data.references; state.ai = data.ai;
   state.warehouse = data.warehouse || { tables: {}, managedFields: {} };
+  state.meetingTasks = data.meetingTasks || {};
+  state.orders = data.orders || {};
   if (!preserveDraft) state.draft = clone(state.form);
   const url = new URL(location.href);
   if (state.form) url.searchParams.set("formId", state.form.id);
@@ -260,7 +318,7 @@ async function load(formId = state.form?.id, preserveDraft = false, spaceId = st
   history.replaceState(null, "", url);
   $("create-record").disabled = !state.form || !can("editRecords");
   $("empty-new-form").hidden = !can("manageForms");
-  $("breadcrumb-form").textContent = state.form?.name ?? state.space.name;
+  $("breadcrumb-form").textContent = ["records", "activity", "notifications-rules"].includes(state.view) ? state.form?.name ?? state.space.name : state.space.name;
   setUIText($("sidebar-form-count"), count(state.forms.length, "table"));
   $("notice").hidden = true;
   setUIText($("connection-label"), "Connected");
@@ -272,6 +330,9 @@ async function load(formId = state.form?.id, preserveDraft = false, spaceId = st
   renderSidebar();
   if (!state.form && ["activity", "notifications-rules"].includes(state.view)) renderView("records");
   if (state.view === "warehouse-flows") warehouse.enter(state.view);
+  if (state.view === "inventory-dashboard") inventoryDashboard.enter(state.view);
+  if (state.view === "meeting-tasks") meetingTasks.enter(state.view);
+  if (state.view === "orders") orders.enter(state.view);
   if (["notifications-rules", "ai-tasks", "errors"].includes(state.view)) workspace.enter(state.view);
 }
 
@@ -299,10 +360,11 @@ function openRecord(recordId = null) {
   state.editing = { record: record ? clone(record) : null, form: clone(state.form) };
   const readOnly = !can("editRecords"), role = warehouse.roleOf(state.form.id);
   const managed = [...(state.warehouse.managedFields[role] ?? []), ...(["inboundLines", "outboundLines"].includes(role) ? ["document"] : [])];
+  managed.push(...(state.orders.managedFields?.[orderRole(state.form.id)] ?? []));
   setUIText($("record-dialog-title"), readOnly ? "View record" : record ? "Edit record" : "New record");
   $("record-form-label").textContent = state.form.name;
   $("record-fields").innerHTML = state.form.fields.filter(field => !(role === "stock" && field.id === "stockKey")).map(field => readOnly || managed.includes(field.id)
-    ? html`<div class="input-field"><span class="builder-label">${esc(field.name)}</span><div class="managed-field-value">${warehouse.cell(field, record?.values[field.id], record ?? { formId: state.form.id, values: {} }) ?? renderFieldCell(field, record?.values[field.id], { catalog: state.references })}</div>${!readOnly && managed.includes(field.id) ? html`<span class="managed-field-note">Managed by the warehouse workflow.</span>` : ""}</div>`
+    ? html`<div class="input-field"><span class="builder-label">${esc(field.name)}</span><div class="managed-field-value">${warehouse.cell(field, record?.values[field.id], record ?? { formId: state.form.id, values: {} }) ?? renderFieldCell(field, record?.values[field.id], { catalog: state.references })}</div>${!readOnly && managed.includes(field.id) ? html`<span class="managed-field-note">${uiText(orderRole(state.form.id) ? "Managed by the order workflow." : "Managed by the warehouse workflow.")}</span>` : ""}</div>`
     : makeInput(field, record?.values[field.id])).join("");
   $("record-error").hidden = true;
   $("submit-record").innerHTML = html`${icon("check")}<span>${record ? "Save changes" : "Save record"}</span>`;
@@ -443,7 +505,7 @@ async function navigateTable(id, view = "records", recordId = null, spaceId = st
 }
 
 $("edit-table").addEventListener("click", openBuilder);
-$("delete-table").addEventListener("click", () => { if (can("manageForms") && !warehouse.roleOf(state.form?.id)) guardDraft(() => formDeletion.open(state.form.id)); });
+$("delete-table").addEventListener("click", () => { if (can("manageForms") && !warehouse.roleOf(state.form?.id) && !orderRole(state.form?.id)) guardDraft(() => formDeletion.open(state.form.id)); });
 $("empty-new-form").addEventListener("click", () => newTable("custom"));
 $("close-builder").addEventListener("click", () => {
   if (!state.builderBusy) guardDraft(() => $("builder-dialog").close());
@@ -586,6 +648,11 @@ document.addEventListener("click", (event) => {
   }
   const table = event.target.closest("[data-table]");
   if (table) guardDraft(() => navigateTable(table.dataset.table));
+  const orderWorkflow = event.target.closest("[data-order-workflow],[data-open-order-workflows]");
+  if (orderWorkflow) guardDraft(async () => {
+    renderView("orders");
+    if (orderWorkflow.dataset.orderWorkflow) await orders.open(orderWorkflow.dataset.orderWorkflow);
+  });
   const createTable = event.target.closest("[data-new-table]");
   if (createTable) newTable(createTable.dataset.newTable);
   const view = event.target.closest("[data-view]");
@@ -595,15 +662,16 @@ document.addEventListener("click", (event) => {
   const historyLink = event.target.closest("[data-open-record]");
   if (edit) openRecord(edit.dataset.edit);
   if (historyLink) openRecord(historyLink.dataset.openRecord);
-  if (remove && can("editRecords")) { const record = state.records.find(record => record.id === remove.dataset.delete); if (record && warehouse.canDelete(record)) { state.deleting = clone(record); $("delete-dialog").showModal(); } }
+  if (remove && can("editRecords")) { const record = state.records.find(record => record.id === remove.dataset.delete); if (record && canDeleteRecord(record)) { state.deleting = clone(record); $("delete-dialog").showModal(); } }
 });
 window.addEventListener("beforeunload", (event) => { if (dirty()) { event.preventDefault(); event.returnValue = ""; } });
 window.addEventListener("hashchange", () => {
   const view = location.hash.slice(1);
-  if (!["records", "activity", "warehouse-flows", "notifications-rules", "ai-tasks", "errors"].includes(view)) return;
+  if (!["records", "activity", "warehouse-flows", "inventory-dashboard", "meeting-tasks", "orders", "notifications-rules", "ai-tasks", "errors"].includes(view)) return;
   guardDraft(() => renderView(view));
 });
 $("record-dialog").addEventListener("cancel", (event) => { if (state.busy) event.preventDefault(); });
 window.addEventListener("warehouse-filter", () => { if (state.form) renderRecords(); });
+document.addEventListener("orderschanged", () => { if (state.user) refresh(); });
 icons();
 auth.start();

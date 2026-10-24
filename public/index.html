@@ -5,26 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#f2f3fa">
-    <title>Form Studio</title>
+    <title>Releaf</title>
     <link rel="stylesheet" href="/styles.css">
     <link rel="stylesheet" href="/assistant.css">
     <link rel="stylesheet" href="/workflows.css">
     <link rel="stylesheet" href="/workspace.css">
     <link rel="stylesheet" href="/warehouse.css">
+    <link rel="stylesheet" href="/inventory-dashboard.css">
+    <link rel="stylesheet" href="/meeting-tasks.css">
+    <link rel="stylesheet" href="/orders.css">
     <link rel="stylesheet" href="/auth.css">
     <script defer src="/vendor/lucide.js"></script>
+    <script defer src="/vendor/chart.js"></script>
     <script type="module" src="/app.js"></script>
   </head>
   <body>
     <div class="workspace" id="app-workspace" hidden>
       <aside class="sidebar">
-        <a class="brand" href="#records" aria-label="Form Studio home"><span class="brand-mark"><i data-lucide="panels-top-left"></i></span><span class="brand-copy"><strong>Form Studio</strong><span>WORKSPACE</span></span></a>
+        <a class="brand" href="#records" aria-label="Releaf home"><span class="brand-mark"><i data-lucide="leaf" aria-hidden="true"></i></span><span class="brand-copy"><strong>Releaf</strong><span>WORKSPACE</span></span></a>
         <button class="icon-button mobile-navigation-toggle" id="toggle-navigation" title="Business modules" aria-label="Business modules" aria-controls="module-navigation" aria-expanded="false"><i data-lucide="menu"></i></button>
         <div class="sidebar-label">MODULES</div>
         <nav class="navigation" id="module-navigation" aria-label="Business modules"></nav>
         <div class="sidebar-divider"></div>
         <div class="sidebar-context"><span class="context-dot"></span><span>Local workspace<small id="sidebar-form-count">1 form</small></span></div>
-        <div class="sidebar-foot">FORM STUDIO <span>/</span> 01</div>
+        <div class="sidebar-foot">RELEAF <span>/</span> 01</div>
       </aside>
       <main class="main-area">
         <header class="topbar"><div class="breadcrumb"><span id="breadcrumb-form">Workspace</span><i data-lucide="chevron-right"></i><strong id="breadcrumb-current">Records</strong></div><div class="topbar-end"><select class="language-select" data-language-picker aria-label="Language" title="Language"><option value="en">English</option><option value="zh">中文</option></select><button class="icon-button" data-ai-settings title="AI settings" aria-label="AI settings"><i data-lucide="bot"></i></button><span class="connection" id="connection-state"><span class="context-dot"></span><span id="connection-label">Connecting</span></span><div class="account-control"><button type="button" class="topbar-avatar account-button" id="account-button" aria-label="Account" title="Account" aria-controls="account-menu" aria-expanded="false">W</button><div class="account-menu" id="account-menu" hidden></div></div></div></header>
@@ -54,6 +58,9 @@
           <div class="builder-footer"><span id="builder-save-state">All changes saved</span><div class="heading-actions"><button class="icon-button" id="reset-builder" aria-label="Discard unsaved changes" title="Discard unsaved changes" disabled><i data-lucide="undo-2"></i></button><button class="icon-button toolbar-icon" id="preview-form" aria-label="Preview form" title="Preview form" disabled><i data-lucide="eye"></i></button><button class="button button-primary" id="save-builder" disabled><i data-lucide="check"></i><span>Save table</span></button></div></div>
         </dialog>
         <section class="page-view" id="view-warehouse-flows" hidden></section>
+        <section class="page-view inventory-dashboard" id="view-inventory-dashboard" hidden></section>
+        <section class="page-view" id="view-meeting-tasks" hidden></section>
+        <section class="page-view" id="view-orders" hidden></section>
         <section class="page-view workspace-view" id="view-notifications-rules" hidden></section>
         <section class="page-view workspace-view" id="view-ai-tasks" hidden></section>
         <section class="page-view workspace-view" id="view-errors" hidden></section>

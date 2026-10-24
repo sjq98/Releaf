@@ -31,6 +31,32 @@ const coreFields = {
 const stable = (value) => JSON.stringify(value ?? null);
 const today = () => new Date().toISOString().slice(0, 10);
 const dateTime = () => new Date().toISOString().slice(0, 16);
+const legacyNames = {
+  "仓储管理": "Warehouse Management", "库存管理": "Inventory Management",
+  "入库管理": "Inbound Management", "出库管理": "Outbound Management", "系统配置": "System Settings",
+  "仓库信息": "Warehouses", "商品表": "Products", "库存表": "Stock",
+  "入库单": "Inbound Requests", "出库单": "Outbound Requests",
+  "入库明细": "Inbound Request Lines", "出库明细": "Outbound Request Lines",
+  "仓库编码": "Warehouse Code", "仓库名称": "Warehouse Name", "仓库地址": "Warehouse Address",
+  "负责人": "Manager", "备注": "Notes", "商品": "Product", "仓库": "Warehouse",
+  "商品编码": "Product Code", "商品名称": "Product Name", "商品图片": "Product Image",
+  "商品分类": "Category", "规格型号": "Specification", "单位": "Unit", "启用": "Active",
+  "当前库存数量": "Current Quantity", "库存下限": "Minimum Quantity",
+  "期初库存数量": "Opening Quantity", "库存标识": "Stock Key",
+  "入库单号": "Inbound Request Number", "出库单号": "Outbound Request Number",
+  "入库状态": "Inbound Status", "出库状态": "Outbound Status",
+  "入库类型": "Inbound Type", "出库类型": "Outbound Type",
+  "入库仓库": "Inbound Warehouse", "出库仓库": "Outbound Warehouse",
+  "入库总量": "Inbound Total Quantity", "出库总量": "Outbound Total Quantity",
+  "申请人": "Applicant", "申请日期": "Application Date", "审批人": "Approver",
+  "入库日期": "Inbound Date", "出库日期": "Outbound Date", "入库拍照": "Inbound Photos",
+  "流程发起人": "Workflow Initiator", "流程状态": "Workflow Status", "流程进度": "Workflow Progress",
+  "流程启动时间": "Workflow Started At", "流程结束时间": "Workflow Ended At",
+  "所属入库单": "Inbound Request", "所属出库单": "Outbound Request",
+  "入库产品": "Inbound Product", "出库产品": "Outbound Product",
+  "入库数量": "Inbound Quantity", "出库数量": "Outbound Quantity",
+};
+const englishName = (name) => Object.hasOwn(legacyNames, name) ? legacyNames[name] : name;
 function exact(value) {
   const decimal = new D(value);
   if (!decimal.isFinite() || decimal.abs().gt(1e15) || !new D(decimal.toNumber()).eq(decimal)) fail("Warehouse quantity is outside the supported exact numeric range.");
@@ -71,32 +97,32 @@ export function createWarehouseSystem({ db, store }) {
     return store.transaction(() => {
       store.spaces.get(spaceId);
       if (Object.keys(tableIds(spaceId)).length) { migrate(); return state(spaceId); }
-      const root = store.spaces.createNode({ spaceId, name: "仓储管理" });
-      const stockNode = store.spaces.createNode({ spaceId, parentId: root.id, name: "库存管理" });
-      const inNode = store.spaces.createNode({ spaceId, parentId: root.id, name: "入库管理" });
-      const outNode = store.spaces.createNode({ spaceId, parentId: root.id, name: "出库管理" });
-      const settingsNode = store.spaces.createNode({ spaceId, parentId: root.id, name: "系统配置" });
+      const root = store.spaces.createNode({ spaceId, name: "Warehouse Management" });
+      const stockNode = store.spaces.createNode({ spaceId, parentId: root.id, name: "Inventory Management" });
+      const inNode = store.spaces.createNode({ spaceId, parentId: root.id, name: "Inbound Management" });
+      const outNode = store.spaces.createNode({ spaceId, parentId: root.id, name: "Outbound Management" });
+      const settingsNode = store.spaces.createNode({ spaceId, parentId: root.id, name: "System Settings" });
       const create = (role, name, fields, parentId) => {
         const form = store.createForm({ spaceId, moduleId: "inventory", parentId, name, fields });
         db.prepare("INSERT INTO warehouse_forms VALUES (?, ?, ?)").run(spaceId, role, form.id);
         return form;
       };
-      const warehouses = create("warehouses", "仓库信息", [field("code", "仓库编码", "text", { required: true, unique: true }), field("name", "仓库名称", "text", { required: true }), field("location", "仓库地址"), field("manager", "负责人"), field("notes", "备注", "longtext")], settingsNode.id);
-      const products = create("products", "商品表", productFields(), settingsNode.id);
-      const stock = create("stock", "库存表", [ref("product", "商品", products, "code"), field("name", "商品名称", "text", { required: true }), field("currentQuantity", "当前库存数量", "number"), field("minimum", "库存下限", "number"), field("code", "商品编码", "text", { required: true }), ref("warehouse", "仓库", warehouses, "code"), field("image", "商品图片", "attachment"), field("category", "商品分类"), field("specification", "规格型号"), field("unit", "单位", "text", { required: true }), field("openingQuantity", "期初库存数量", "number"), field("stockKey", "库存标识", "text", { required: true, unique: true })], stockNode.id);
+      const warehouses = create("warehouses", "Warehouses", [field("code", "Warehouse Code", "text", { required: true, unique: true }), field("name", "Warehouse Name", "text", { required: true }), field("location", "Warehouse Address"), field("manager", "Manager"), field("notes", "Notes", "longtext")], settingsNode.id);
+      const products = create("products", "Products", productFields(), settingsNode.id);
+      const stock = create("stock", "Stock", [ref("product", "Product", products, "code"), field("name", "Product Name", "text", { required: true }), field("currentQuantity", "Current Quantity", "number"), field("minimum", "Minimum Quantity", "number"), field("code", "Product Code", "text", { required: true }), ref("warehouse", "Warehouse", warehouses, "code"), field("image", "Product Image", "attachment"), field("category", "Category"), field("specification", "Specification"), field("unit", "Unit", "text", { required: true }), field("openingQuantity", "Opening Quantity", "number"), field("stockKey", "Stock Key", "text", { required: true, unique: true })], stockNode.id);
       for (const role of headers) {
-        const incoming = role === "inbound", prefix = incoming ? "入库" : "出库";
-        const form = create(role, `${prefix}单`, [
-          field("number", `${prefix}单号`, "text", { required: true, unique: true }),
-          field("status", `${prefix}状态`, "select", { required: true, options: statuses }),
-          field("type", `${prefix}类型`, "select", { required: true, options: incoming ? ["Direct receipt", "Purchase receipt", "Return receipt"] : ["Direct issue", "Sales issue", "Production issue", "Return issue"] }),
-          ref("warehouse", `${prefix}仓库`, warehouses, "code"), field("totalQuantity", `${prefix}总量`, "number"),
-          field("applicant", "申请人", "text", { required: true }), field("applicationDate", "申请日期", "date", { required: true }), field("approver", "审批人"), field("postedDate", `${prefix}日期`, "date"),
-          ...(incoming ? [field("photos", "入库拍照", "attachment")] : []), field("notes", "备注", "longtext"),
-          field("initiator", "流程发起人"), field("workflowStatus", "流程状态", "select", { options: ["Not started", "In progress", "Completed", "Rejected", "Cancelled", "Reversed"] }),
-          field("progress", "流程进度"), field("startedAt", "流程启动时间", "datetime"), field("endedAt", "流程结束时间", "datetime"),
+        const incoming = role === "inbound", prefix = incoming ? "Inbound" : "Outbound";
+        const form = create(role, `${prefix} Requests`, [
+          field("number", `${prefix} Request Number`, "text", { required: true, unique: true }),
+          field("status", `${prefix} Status`, "select", { required: true, options: statuses }),
+          field("type", `${prefix} Type`, "select", { required: true, options: incoming ? ["Direct receipt", "Purchase receipt", "Return receipt"] : ["Direct issue", "Sales issue", "Production issue", "Return issue"] }),
+          ref("warehouse", `${prefix} Warehouse`, warehouses, "code"), field("totalQuantity", `${prefix} Total Quantity`, "number"),
+          field("applicant", "Applicant", "text", { required: true }), field("applicationDate", "Application Date", "date", { required: true }), field("approver", "Approver"), field("postedDate", `${prefix} Date`, "date"),
+          ...(incoming ? [field("photos", "Inbound Photos", "attachment")] : []), field("notes", "Notes", "longtext"),
+          field("initiator", "Workflow Initiator"), field("workflowStatus", "Workflow Status", "select", { options: ["Not started", "In progress", "Completed", "Rejected", "Cancelled", "Reversed"] }),
+          field("progress", "Workflow Progress"), field("startedAt", "Workflow Started At", "datetime"), field("endedAt", "Workflow Ended At", "datetime"),
         ], incoming ? inNode.id : outNode.id);
-        create(lineRole(role), `${prefix}明细`, [ref("document", `所属${prefix}单`, form, "number"), field("status", `${prefix}状态`, "select", { options: statuses }), field("postedDate", `${prefix}日期`, "date"), ref("product", `${prefix}产品`, products, "code"), field("quantity", `${prefix}数量`, "number", { required: true }), field("notes", "备注", "longtext")], incoming ? inNode.id : outNode.id);
+        create(lineRole(role), `${prefix} Request Lines`, [ref("document", `${prefix} Request`, form, "number"), field("status", `${prefix} Status`, "select", { options: statuses }), field("postedDate", `${prefix} Date`, "date"), ref("product", `${prefix} Product`, products, "code"), field("quantity", `${prefix} Quantity`, "number", { required: true }), field("notes", "Notes", "longtext")], incoming ? inNode.id : outNode.id);
       }
       insert(warehouses, { code: "WH001", name: "默认仓库" });
       return state(spaceId);
@@ -129,6 +155,7 @@ export function createWarehouseSystem({ db, store }) {
     finally { permit = null; }
   }
   function catalog(body) {
+    store.auth.requireAdmin();
     return store.transaction(() => {
       const { role, values = {}, recordId, version, spaceId = "default" } = body;
       if (!["products", "warehouses", "stock"].includes(role)) fail("Choose a catalog workflow.");
@@ -149,11 +176,10 @@ export function createWarehouseSystem({ db, store }) {
   }
   function migrate() {
     for (const { space_id: spaceId } of db.prepare("SELECT DISTINCT space_id FROM warehouse_forms").all()) {
-      if (tableIds(spaceId).products) continue;
-      store.transaction(() => {
+      if (!tableIds(spaceId).products) store.transaction(() => {
         const stock = table(spaceId, "stock"), warehouses = table(spaceId, "warehouses");
         const parentId = store.spaces.tree(spaceId).find(node => node.formId === warehouses.id)?.parentId;
-        const products = store.createForm({ name: "商品表", moduleId: "inventory", spaceId, parentId, fields: productFields() });
+        const products = store.createForm({ name: "Products", moduleId: "inventory", spaceId, parentId, fields: productFields() });
         db.prepare("INSERT INTO warehouse_forms VALUES (?, 'products', ?)").run(spaceId, products.id);
         const byCode = new Map(), stockToProduct = new Map();
         for (const row of store.listRecords(stock.id)) {
@@ -165,7 +191,7 @@ export function createWarehouseSystem({ db, store }) {
           byCode.set(key, product); stockToProduct.set(row.id, product.id);
           db.prepare("UPDATE records SET values_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify({ ...row.values, product: product.id }), row.id);
         }
-        db.prepare("UPDATE forms SET fields_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify([ref("product", "商品", products, "code"), ...stock.fields]), stock.id);
+        db.prepare("UPDATE forms SET fields_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify([ref("product", "Product", products, "code"), ...stock.fields]), stock.id);
         for (const role of ["inboundLines", "outboundLines"]) {
           const form = table(spaceId, role);
           for (const row of store.listRecords(form.id)) {
@@ -177,7 +203,31 @@ export function createWarehouseSystem({ db, store }) {
           db.prepare("UPDATE forms SET fields_json = ?, version = version + 1 WHERE id = ?").run(JSON.stringify(fields), form.id);
         }
       });
+      migrateNames(spaceId);
     }
+  }
+  function migrateNames(spaceId) {
+    store.transaction(() => {
+      const nodes = store.spaces.tree(spaceId), ancestors = new Set();
+      for (const formId of Object.values(tableIds(spaceId))) {
+        const form = store.getForm(formId), name = englishName(form.name);
+        const fields = form.fields.map(f => ({ ...f, name: englishName(f.name) }));
+        if (name !== form.name || fields.some((f, index) => f.name !== form.fields[index].name)) {
+          db.prepare("UPDATE forms SET name = ?, fields_json = ?, version = version + 1, updated_at = ? WHERE id = ?")
+            .run(name, JSON.stringify(fields), new Date().toISOString(), formId);
+        }
+        store.spaces.renameForm(formId, name);
+        let parentId = nodes.find(node => node.formId === formId)?.parentId;
+        while (parentId && !ancestors.has(parentId)) {
+          ancestors.add(parentId);
+          parentId = nodes.find(node => node.id === parentId)?.parentId;
+        }
+      }
+      for (const node of nodes.filter(node => ancestors.has(node.id))) {
+        const name = englishName(node.name);
+        if (name !== node.name) db.prepare("UPDATE navigation_nodes SET name = ? WHERE id = ?").run(name, node.id);
+      }
+    });
   }
   function prepare(form, input, previous, id, creating) {
     const role = roleOf(form.id);
@@ -401,5 +451,5 @@ export function createWarehouseSystem({ db, store }) {
 }
 
 function productFields() {
-  return [field("code", "商品编码", "text", { required: true, unique: true }), field("name", "商品名称", "text", { required: true }), field("image", "商品图片", "attachment"), field("category", "商品分类"), field("specification", "规格型号"), field("unit", "单位", "text", { required: true }), field("notes", "备注", "longtext"), field("active", "启用", "checkbox")];
+  return [field("code", "Product Code", "text", { required: true, unique: true }), field("name", "Product Name", "text", { required: true }), field("image", "Product Image", "attachment"), field("category", "Category"), field("specification", "Specification"), field("unit", "Unit", "text", { required: true }), field("notes", "Notes", "longtext"), field("active", "Active", "checkbox")];
 }

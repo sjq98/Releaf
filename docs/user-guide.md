@@ -28,11 +28,49 @@ Changing your own password replaces the current session and signs out other sess
 | Role | Access |
 | --- | --- |
 | Administrator | Member workflows plus user management, form/schema/record editing, navigation, AI/provider settings, notification rules and Error Center resolution |
-| Member | Read shared tables, maintain catalog data through warehouse workflows, create/edit requests, run warehouse transitions, approve/reject when assigned, use the assistant and own Agent tokens, read notifications and run/retry/cancel configured AI tasks |
+| Member | Read shared tables and inventory analysis, manage own orders, create/edit requests, run warehouse transitions, approve/reject when assigned, use the assistant and own Agent tokens, read notifications and run/retry/cancel configured AI tasks |
 
 Members cannot directly edit table records or schemas, create/move/delete forms and
 navigation nodes, configure AI tasks or change provider settings. Accounts share the
-local workspace; this is not per-company or per-Space membership isolation.
+local workspace; this is not per-company or per-Space membership isolation. Product,
+warehouse and stock-setting maintenance also require an administrator.
+
+## Inventory Analysis
+
+**Inventory analysis** opens by default and is available from the sidebar. Choose a
+month range, warehouse, product and unit, then apply the filters. The two curves show
+posted inbound/outbound quantities. Stock alerts show live balances and shortages;
+the monthly report shows reconciled opening/closing quantities and operational
+turnover. Use record links to inspect source data, or the download icon to export
+the filtered report. Members can read/export without gaining editing privileges.
+See [calculation rules and demo data](inventory-dashboard.md).
+
+## Order Management
+
+Select the **Order management** Space alongside Inventory Management System.
+Its sidebar contains Orders, Payment confirmations and Invoices as real forms.
+Create an order manually, or paste a customer message and **Import order** with
+the configured workspace AI provider. Import saves a pending order and one linked,
+unchecked payment confirmation. AI never fills an order amount, even when a
+customer quotes a total. A person verifies the details and notes, enters the MYR
+amount and checks the order-review box.
+
+Use the detail dialog to accept, prepare and complete an order. Delivery orders
+also have a dispatch step. Draft and accepted orders can be edited; cancellation
+is blocked by a confirmed payment or invoices. After checking actual wallet
+receipts, check **Paid in full**. There is no received/outstanding amount or
+partial-payment ledger. Changing the order amount clears the confirmation for
+recheck. Register invoice numbers and amounts manually through **Record invoice**.
+Products and quantities stay in Notes; orders never change inventory.
+
+Administrators may use **WhatsApp** to start the separately installed connector,
+link an authorized account by scanning its QR, select one chat and preview/import
+bounded recent incoming text. No account is linked or messages read automatically.
+Orders still need human review and manual amounts. See [bridge setup and privacy](whatsapp-bridge.md).
+
+**Prepare status message** creates text to copy locally; it does not send WhatsApp
+messages. Members manage orders they created; administrators manage all orders.
+Agent operations enforce the same rules. See [Order Management](orders.md).
 
 ## Workspace and Forms
 
@@ -55,6 +93,11 @@ table settings deletes a custom form after an impact preview and confirmation.
 The sidebar form menu has the same entry. References, AI-task dependencies and core
 warehouse forms block deletion. See [Form Deletion](form-deletion.md).
 
+Hold the middle mouse button over a table and drag in any direction to pan. This also
+works in document-line dialogs and dashboard tables. Vertical movement uses the enclosing
+modal or page when the table has no vertical overflow. Left-click editing, text selection,
+the mouse wheel and touch scrolling remain unchanged.
+
 For custom forms, the administrator's spreadsheet icon imports XLSX/CSV into an existing or new table. Map columns,
 preview errors and confirm. Imports append transactionally, resolve unique reference
 values and reject stale previews; they never silently overwrite records.
@@ -65,7 +108,7 @@ The seven warehouse tables are read-only for members. Administrators can maintai
 records and custom fields, but core fields can only be renamed/reordered, and managed
 balances/statuses and posted history stay protected. Open **Warehouse workflows**:
 
-1. **Product registration**: add a unique code, name and unit. Maintain warehouse details with **Warehouse registration**.
+1. As an administrator, use **Product registration** to add a unique code, name and unit. Maintain warehouse details with **Warehouse registration**.
 2. Start **Inbound workflow**, choose a warehouse and an active approver account, then select catalog products. The applicant is the signed-in user. Existing stock is not required.
 3. **Import product lines** can fill an individual request from XLSX/CSV headers such as 商品编码 and 数量. Preview and replace the lines, then submit.
 4. Sign in as the assigned approver to approve or reject. After approval, preview and confirm stock movement. A stock row is created automatically for a new product/warehouse pair.
@@ -106,5 +149,9 @@ unencrypted at rest. Do not share the database or backups. Passwords use salted 
 and session/Agent tokens are stored as hashes. Local authenticated roles are implemented;
 public deployment, tenant isolation, billing and an Orbyte connection are not.
 
-Old order, meeting, supplier and recipe/purchase modules are no longer active.
+The former order, supplier and recipe/purchase prototypes, and the old meeting prototype,
+are no longer active. The current independent [order module](orders.md) replaces the
+former order prototype.
+The replacement [Meeting Tasks Space](meeting-tasks.md) supports one-click
+summary extraction into its Tasks form, alongside the inventory Space.
 Their source remains only under `future/`; never run that snapshot against live data.

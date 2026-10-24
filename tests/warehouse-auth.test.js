@@ -100,6 +100,54 @@ test("ordinary users cannot use generic mutations or administration endpoints", 
   assert.equal(store.getRecord(product.id).values.name, "Flour");
 });
 
+test("catalog maintenance requires an administrator through the service and HTTP", async t => {
+  const { store, admin, operator, warehouse, product, request } = await fixture(t);
+  const stock = store.warehouse.catalog({
+    role: "stock", values: { product: product.id, warehouse: warehouse.id, minimum: 2, openingQuantity: 5 },
+  });
+  const attempts = [
+    { role: "products", values: { code: "MEMBER-P", name: "Forbidden product", unit: "kg" }, record: product, changes: { name: "Forbidden" } },
+    { role: "warehouses", values: { code: "MEMBER-W", name: "Forbidden warehouse" }, record: warehouse, changes: { name: "Forbidden" } },
+    { role: "stock", values: { product: product.id, warehouse: warehouse.id, minimum: 100 }, record: stock, changes: { minimum: 100, openingQuantity: 100 } },
+  ];
+  const before = attempts.map(({ record }) => store.getRecord(record.id));
+  for (const { role, values, record, changes } of attempts) {
+    for (const body of [{ role, values }, { role, recordId: record.id, version: record.version, values: changes }]) {
+      store.auth.withUser(operator.user, () => assert.throws(() => store.warehouse.catalog(body), { status: 403 }, role));
+      assert.equal((await request(operator, "/api/warehouse/catalog", "POST", body)).status, 403, role);
+    }
+  }
+  assert.deepEqual(attempts.map(({ record }) => store.getRecord(record.id)), before);
+  const allowed = await request(admin, "/api/warehouse/catalog", "POST", {
+    role: "products", recordId: product.id, version: product.version, values: { name: "Administrator updated flour" },
+  });
+  assert.equal(allowed.status, 200);
+  assert.equal(allowed.data.values.name, "Administrator updated flour");
+  const registered = await request(admin, "/api/warehouse/catalog", "POST", {
+    role: "warehouses", values: { code: "ADMIN-W", name: "Administrator warehouse" },
+  });
+  assert.equal(registered.status, 200);
+  assert.equal(registered.data.values.code, "ADMIN-W");
+});
+
+test("inventory dashboard is readable by members but requires a login", async t => {
+  const { store, admin, operator, warehouse, product, request } = await fixture(t);
+  const stock = store.warehouse.catalog({
+    role: "stock", values: { product: product.id, warehouse: warehouse.id, minimum: 6, openingQuantity: 5 },
+  });
+  const path = "/api/warehouse/dashboard?from=2026-10&to=2026-10";
+  assert.equal((await request(null, path)).status, 401);
+  const administrator = await request(admin, path), member = await request(operator, path);
+  assert.equal(administrator.status, 200);
+  assert.equal(member.status, 200);
+  assert.deepEqual(member.data.summary, administrator.data.summary);
+  assert.deepEqual(member.data.warnings, administrator.data.warnings);
+  assert.equal(member.data.warnings[0].stockId, stock.id);
+  assert.equal(member.data.warnings[0].shortage, 1);
+  assert.equal((await request(operator, "/api/warehouse/dashboard", "POST", {})).status, 403);
+  assert.deepEqual(store.getRecord(stock.id), stock);
+});
+
 test("workflow actors and applicants come from login and only the assigned user can approve", async t => {
   const { store, operator, approver, request, documentBody } = await fixture(t);
   const created = await request(operator, "/api/warehouse/documents", "POST", documentBody());

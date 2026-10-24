@@ -233,7 +233,7 @@ test("Agent navigation, notification and AI-task tools use review mode and canno
   const { store, tables } = setup(t), ops = createAgentOperations(store);
   const token = ops.createToken({ name: "Business operations" }), actor = { ...token, type: "token" };
   const nodeAction = ops.run("create_navigation_node", { name: "Products" }, actor, "folder");
-  assert.equal(store.spaces.tree().some(n => n.name === "Products"), false);
+  assert.equal(store.spaces.tree().some(n => n.kind === "node" && n.name === "Products"), false);
   const node = ops.approve(nodeAction.id).result;
   assert.ok(store.spaces.tree().some(n => n.id === node.id));
   const other = store.spaces.create("Other"), foreign = store.spaces.createNode({ name: "Foreign", spaceId: other.id });

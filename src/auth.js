@@ -343,11 +343,13 @@ export function createAuth(db) {
 
     permissions(user) {
       const isAdmin = user?.active === true && user.role === "admin";
+      const isActive = user?.active === true;
       return {
         manageUsers: isAdmin,
         manageForms: isAdmin,
         editRecords: isAdmin,
         manageSettings: isAdmin,
+        manageOrders: isActive,
       };
     },
   };

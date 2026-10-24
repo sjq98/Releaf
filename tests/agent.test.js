@@ -96,7 +96,7 @@ test("table-edit previews include lost values, roll back schema changes and dete
 test("creating and editing forms uses the same constraints and keeps stable field IDs", (t) => {
   const { store, operations, run } = fixture(t);
   const proposed = run("create_form", { name: "Suppliers", moduleId: "custom", fields });
-  assert.equal(store.listForms().length, 2);
+  assert.equal(store.listForms("default").length, 2);
   const form = operations.approve(proposed.id).result;
   assert.equal(form.moduleId, "custom");
   const edit = run("update_form", { formId: form.id, version: form.version, name: "Partners",

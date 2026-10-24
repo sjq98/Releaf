@@ -10,11 +10,14 @@ import { createAssistant } from "./assistant.js";
 import { createAgentHTTP } from "./agent-http.js";
 import { createTableImport, parseTableFile } from "./table-import.js";
 import { sessionCookie, clearSessionCookie } from "./auth.js";
+import { ORDER_SPACE_ID } from "./order-system.js";
+import { createWhatsAppBridge } from "./whatsapp-bridge.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATIC = new Map([
   ["/", ["public/index.html", "text/html; charset=utf-8"]],
   ["/app.js", ["public/app.js", "text/javascript; charset=utf-8"]],
+  ["/table-pan.js", ["public/table-pan.js", "text/javascript; charset=utf-8"]],
   ["/auth.js", ["public/auth.js", "text/javascript; charset=utf-8"]],
   ["/auth.css", ["public/auth.css", "text/css; charset=utf-8"]],
   ["/i18n.js", ["public/i18n.js", "text/javascript; charset=utf-8"]],
@@ -24,6 +27,7 @@ const STATIC = new Map([
   ["/errors.js", ["src/errors.js", "text/javascript; charset=utf-8"]],
   ["/field-ui.js", ["public/field-ui.js", "text/javascript; charset=utf-8"]],
   ["/form-deletion.js", ["public/form-deletion.js", "text/javascript; charset=utf-8"]],
+  ["/space-deletion.js", ["public/space-deletion.js", "text/javascript; charset=utf-8"]],
   ["/ai-settings.js", ["public/ai-settings.js", "text/javascript; charset=utf-8"]],
   ["/assistant.js", ["public/assistant.js", "text/javascript; charset=utf-8"]],
   ["/assistant.css", ["public/assistant.css", "text/css; charset=utf-8"]],
@@ -32,6 +36,12 @@ const STATIC = new Map([
   ["/warehouse.js", ["public/warehouse.js", "text/javascript; charset=utf-8"]],
   ["/warehouse-import.js", ["public/warehouse-import.js", "text/javascript; charset=utf-8"]],
   ["/warehouse.css", ["public/warehouse.css", "text/css; charset=utf-8"]],
+  ["/inventory-dashboard.js", ["public/inventory-dashboard.js", "text/javascript; charset=utf-8"]],
+  ["/inventory-dashboard.css", ["public/inventory-dashboard.css", "text/css; charset=utf-8"]],
+  ["/meeting-tasks.js", ["public/meeting-tasks.js", "text/javascript; charset=utf-8"]],
+  ["/meeting-tasks.css", ["public/meeting-tasks.css", "text/css; charset=utf-8"]],
+  ["/orders.js", ["public/orders.js", "text/javascript; charset=utf-8"]],
+  ["/orders.css", ["public/orders.css", "text/css; charset=utf-8"]],
   ["/workspace.js", ["public/workspace.js", "text/javascript; charset=utf-8"]],
   ["/navigation-drag.js", ["public/navigation-drag.js", "text/javascript; charset=utf-8"]],
   ["/workspace.css", ["public/workspace.css", "text/css; charset=utf-8"]],
@@ -40,6 +50,7 @@ const STATIC = new Map([
   ["/vendor/pdf.mjs", ["node_modules/pdfjs-dist/build/pdf.min.mjs", "text/javascript; charset=utf-8"]],
   ["/vendor/pdf.worker.mjs", ["node_modules/pdfjs-dist/build/pdf.worker.min.mjs", "text/javascript; charset=utf-8"]],
   ["/vendor/lucide.js", ["node_modules/lucide/dist/umd/lucide.min.js", "text/javascript; charset=utf-8"]],
+  ["/vendor/chart.js", ["node_modules/chart.js/dist/chart.umd.min.js", "text/javascript; charset=utf-8"]],
 ]);
 
 async function readJson(request, limit = 256 * 1024) {
@@ -62,10 +73,16 @@ async function readJson(request, limit = 256 * 1024) {
   }
 }
 
-export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskAI, env = process.env, aiFetch = fetch, assistantFetch = aiFetch } = {}) {
+export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskAI, env = process.env, aiFetch = fetch, assistantFetch = aiFetch, whatsappOptions = {} } = {}) {
   const store = createStore(database);
   const auth = store.auth;
   const aiConfig = createAIConfig({ store, env, fetchImpl: aiFetch });
+  store.meetings.initialize();
+  store.meetings.configure({ aiConfig, fetchImpl: aiFetch });
+  store.orders.configure({ aiConfig, fetchImpl: aiFetch });
+  store.whatsapp = createWhatsAppBridge({
+    store, projectPath: resolve(ROOT, "..", "whatsapp-digest-local"), ...whatsappOptions,
+  });
   const operations = createAgentOperations(store);
   const assistant = createAssistant({ store, operations, env, fetchImpl: assistantFetch });
   const agentHTTP = createAgentHTTP({ store, operations, assistant, readJson });
@@ -135,11 +152,12 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
           auth.requireAdmin();
           return send(200, auth.updateUser(userMatch[1], await readJson(request, 8 * 1024)));
         }
-        const memberWrite = pathname === "/api/warehouse/catalog" ||
-          pathname === "/api/formulas/preview" ||
+        const memberWrite = pathname === "/api/formulas/preview" ||
           pathname === "/api/warehouse/files" || pathname.startsWith("/api/warehouse/imports/") ||
           pathname === "/api/warehouse/documents" || /^\/api\/warehouse\/documents\/[a-zA-Z0-9-]+(?:\/(?:preview|transition))?$/.test(pathname) ||
           pathname === "/api/attachments" || /^\/api\/notifications\/[a-zA-Z0-9-]+$/.test(pathname) ||
+          pathname === "/api/orders" || pathname === "/api/orders/extract" || pathname === "/api/orders/intake" ||
+          /^\/api\/orders\/[a-zA-Z0-9-]+(?:\/(?:transition|payments|payment-confirmation|invoices|notifications))?$/.test(pathname) ||
           /^\/api\/ai-tasks\/[a-zA-Z0-9-]+\/run$/.test(pathname) ||
           /^\/api\/ai-runs\/[a-zA-Z0-9-]+\/(?:preview|retry|cancel)$/.test(pathname);
         if (!["GET", "HEAD"].includes(method) && !memberWrite) auth.requireAdmin();
@@ -151,10 +169,62 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
           return store.automation.once(scopedKey, { pathname, method, body }, callback);
         };
         if (pathname === "/api/bootstrap" && method === "GET") return send(200, { ...store.bootstrap(url.searchParams.get("formId"), spaceId), ai: aiConfig.status, user, permissions: auth.permissions(user) });
+        if (pathname === "/api/orders/workspace" && method === "GET") return send(200, store.orders.state(url.searchParams.get("spaceId") ?? ORDER_SPACE_ID));
+        if (pathname === "/api/orders/extract" && method === "POST") return send(200, await store.orders.extract(await readJson(request)));
+        if (pathname === "/api/orders/intake" && method === "POST") {
+          const body = await readJson(request);
+          const draft = await store.orders.extract(body);
+          return send(201, write(body, () => store.orders.importExtracted({
+            draft, text: body.text,
+          })));
+        }
+        if (pathname.startsWith("/api/whatsapp/")) {
+          auth.requireAdmin();
+          if (pathname === "/api/whatsapp/status" && method === "GET") return send(200, await store.whatsapp.status());
+          if (pathname === "/api/whatsapp/chats" && method === "GET") return send(200, await store.whatsapp.chats());
+          if (method === "POST") {
+            const body = await readJson(request);
+            if (pathname === "/api/whatsapp/connect") return send(200, await store.whatsapp.connect(body));
+            if (pathname === "/api/whatsapp/link") return send(200, await store.whatsapp.link());
+            if (pathname === "/api/whatsapp/preview") return send(200, await store.whatsapp.previewImport(body));
+            if (pathname === "/api/whatsapp/import") return send(201, write(body, () => store.whatsapp.importMessages(body)));
+          }
+        }
+        if (pathname === "/api/orders") {
+          if (method === "GET") return send(200, store.orders.list(url.searchParams.get("spaceId") ?? ORDER_SPACE_ID));
+          if (method === "POST") {
+            const body = await readJson(request);
+            return send(201, write(body, () => store.orders.create(body)));
+          }
+        }
+        const orderMatch = pathname.match(/^\/api\/orders\/([a-zA-Z0-9-]+)(?:\/(transition|payments|payment-confirmation|invoices|notifications))?$/);
+        if (orderMatch) {
+          const [, id, action] = orderMatch;
+          if (!action && method === "GET") return send(200, store.orders.get(id));
+          if (!action && method === "PATCH") {
+            const body = await readJson(request);
+            return send(200, write(body, () => store.orders.update(id, body)));
+          }
+          if (action && method === "POST") {
+            if (action === "payments") throw new AppError(410, "Per-payment amounts are retired. Use the paid-in-full confirmation workflow.");
+            const handler = { transition: "transition", "payment-confirmation": "confirmPayment", invoices: "invoice", notifications: "notification" }[action];
+            const body = await readJson(request);
+            return send(200, write(body, () => store.orders[handler](id, body)));
+          }
+        }
+        if (pathname === "/api/meeting-tasks/imports") {
+          if (method === "GET") return send(200, store.meetings.list(spaceId));
+          if (method === "POST") return send(200, await store.meetings.importSummary(await readJson(request), request.headers["idempotency-key"]));
+        }
+        const meetingImport = pathname.match(/^\/api\/meeting-tasks\/imports\/([a-zA-Z0-9-]+)$/);
+        if (meetingImport && method === "GET") return send(200, store.meetings.get(meetingImport[1], spaceId));
         if (/^\/api\/(?:inventory|suppliers|reconciliations|meetings|stock-receipts)(?:\/|$)/.test(pathname)) {
           throw new AppError(410, "This legacy module has been retired. Use the warehouse workspace or configurable AI tasks.");
         }
         if (pathname === "/api/warehouse" && method === "GET") return send(200, store.warehouse.state(spaceId));
+        if (pathname === "/api/warehouse/dashboard" && method === "GET") {
+          return send(200, store.warehouseDashboard.report(Object.fromEntries(url.searchParams)));
+        }
         if (pathname === "/api/warehouse/catalog" && method === "POST") {
           const body = await readJson(request); return send(200, write(body, () => store.warehouse.catalog(body)));
         }
@@ -198,8 +268,13 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
             return space;
           })));
         }
-        const spaceMatch = pathname.match(/^\/api\/spaces\/([a-zA-Z0-9-]+)$/);
-        if (spaceMatch && method === "PATCH") return send(200, store.spaces.rename(spaceMatch[1], (await readJson(request)).name));
+        const spaceMatch = pathname.match(/^\/api\/spaces\/([a-zA-Z0-9-]+)(\/deletion-preview)?$/);
+        if (spaceMatch?.[2] && method === "GET") return send(200, store.spaceDeletions.inspect(spaceMatch[1]));
+        if (spaceMatch && !spaceMatch[2] && method === "PATCH") return send(200, store.spaces.rename(spaceMatch[1], (await readJson(request)).name));
+        if (spaceMatch && !spaceMatch[2] && method === "DELETE") {
+          const body = await readJson(request);
+          return send(200, write(body, () => store.spaceDeletions.remove(spaceMatch[1], body)));
+        }
         if (pathname === "/api/nodes" && method === "GET") return send(200, store.spaces.tree(spaceId));
         if (pathname === "/api/nodes" && method === "POST") {
           const body = await readJson(request); return send(201, write(body, () => store.spaces.createNode(body)));
@@ -345,6 +420,7 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
     }
   });
   server.on("close", stopTasks);
+  server.on("close", () => store.whatsapp.close());
   return { server, store };
 }
 

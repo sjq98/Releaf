@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { AppError } from "./errors.js";
 import { normalizeValues } from "./field-types.js";
 import { MODULES } from "./modules.js";
+import { ORDER_SPACE_ID } from "./order-system.js";
 
 const object = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: false });
 const string = { type: "string" };
@@ -10,13 +11,58 @@ const values = { type: "object", additionalProperties: true };
 const field = object({
   id: string, name: string, type: { type: "string", enum: ["text", "longtext", "number", "date", "datetime", "select", "checkbox", "reference", "attachment"] },
   required: { type: "boolean" }, unique: { type: "boolean" }, options: { type: "array", items: string },
+  maxLength: { type: "integer", minimum: 1, maximum: 40000 },
   reference: object({ formId: string, fieldId: string }, ["formId", "fieldId"]),
   formula: values,
 }, ["id", "name", "type", "required", "unique"]);
 const inventoryLines = { type: "array", maxItems: 100, items: values };
 const importArgs = { fileId: string, sheetIndex: { type: "integer" }, mapping: values, kind: { type: "string", enum: ["inbound", "outbound"] }, values,
   stage: { type: "string", enum: ["draft", "submit", "post"] }, actor: string, approvalActor: string };
+const nullableOrderText = { type: ["string", "null"] };
+const orderFields = {
+  customerName: string, customerPhone: nullableOrderText, department: nullableOrderText, salesperson: nullableOrderText,
+  fulfillment: { type: ["string", "null"], enum: ["pickup", "delivery", null] }, deliveryAddress: nullableOrderText,
+  estimatedDeliveryAt: nullableOrderText, requestedTime: nullableOrderText, notes: { ...nullableOrderText, maxLength: 10000 },
+  sourceText: { ...nullableOrderText, maxLength: 40000 }, attachments: { type: "array", maxItems: 10, items: string },
+  totalAmount: { type: ["number", "null"], minimum: 0, maximum: 1e12 },
+  reviewed: { type: "boolean" },
+};
+const orderOperations = new Set([
+  "list_orders", "get_order", "parse_customer_order", "create_order", "update_order",
+  "transition_order", "confirm_order_payment", "record_order_invoice", "prepare_order_notification",
+]);
 const definitions = [
+  ["list_orders", "List orders in the dedicated Order Management Space (order-management). Members can manage their own orders; administrators can manage all orders.", object({ spaceId: string })],
+  ["get_order", "Read order notes, amount, payment and invoice details, current version and available workflow actions before changing it.", object({ orderId: string }, ["orderId"])],
+  ["parse_customer_order", "Classify and extract a read-only draft from customer text. Keep products and quantities in notes. Never fill totalAmount, even when a source mentions a price. Report missing details; a person enters the amount and reviews the saved order. No inventory linkage.", object({
+    spaceId: string, text: { type: "string", maxLength: 40000 },
+  }, ["text"])],
+  ["create_order", "Save an order and its linked unpaid confirmation record. AI-captured orders must have reviewed=false and totalAmount=null; only use an amount or reviewed=true when explicitly supplied/confirmed by the operator. Products and quantities stay in notes. Creation is not acceptance, payment confirmation or stock movement.", object({
+    spaceId: string, ...orderFields,
+  })],
+  ["update_order", "Edit a draft or accepted order with its current version. Omitted fields stay unchanged; null clears optional text. Products stay in notes, totalAmount is explicitly confirmed. Status, payments and invoices use dedicated actions.", object({
+    orderId: string, version, ...orderFields,
+  }, ["orderId", "version"])],
+  ["transition_order", "Advance an order through accept, prepare, ready, dispatch, complete or cancel using its current version and the same state rules as the UI.", object({
+    orderId: string, version, action: { type: "string", enum: ["accept", "prepare", "ready", "dispatch", "complete", "cancel"] },
+  }, ["orderId", "version", "action"])],
+  ["confirm_order_payment", "Set or revoke the order's paid-in-full checkbox only on the operator's explicit instruction after checking receipt. Requires a reviewed order with a manually entered amount and its current order version. A customer message, screenshot or Full access is not proof of receipt. There is no partial-payment ledger.", object({
+    orderId: string, version, confirmed: { type: "boolean" },
+  }, ["orderId", "version", "confirmed"])],
+  ["record_order_invoice", "Add an invoice entry using its actual invoice number, amount and current order version. Do not infer that invoicing proves payment.", object({
+    orderId: string, version, amount: { type: "number", exclusiveMinimum: 0 }, number: string, note: nullableOrderText,
+  }, ["orderId", "version", "amount", "number"])],
+  ["prepare_order_notification", "Prepare a local status notification as copyable text using the current order version. No WhatsApp message is sent and no delivery is verified.", object({
+    orderId: string, version,
+  }, ["orderId", "version"])],
+  ["get_whatsapp_status", "Read the optional local, read-only WhatsApp connection status. Administrator only. Does not connect, read chats or send messages.", object({ spaceId: string })],
+  ["list_whatsapp_chats", "List exact personal chat IDs from the connected WhatsApp account when the administrator asks. No group chats or outbound messages.", object({ spaceId: string, limit: { type: "integer", minimum: 1, maximum: 100 } })],
+  ["preview_whatsapp_import", "Read a bounded, explicitly selected WhatsApp chat, classify incoming text and prepare unreviewed order candidates. No orders are saved. Never scan arbitrary chats; prices from messages are ignored. Returns an owner-scoped expiring plan and fingerprint.", object({
+    spaceId: string, chatId: string, hours: { type: "integer", minimum: 1, maximum: 168 }, limit: { type: "integer", minimum: 1, maximum: 50 },
+  }, ["chatId"])],
+  ["import_whatsapp_orders", "Save the exact WhatsApp preview plan as unreviewed orders and linked unpaid confirmation records. Human review and manual amounts are still required. Does not accept orders, mark payments received, send messages or write invoices.", object({
+    spaceId: string, planId: string, fingerprint: string,
+  }, ["planId", "fingerprint"])],
   ["upload_inventory_file", "Upload an XLSX or UTF-8 CSV with base64 file.data and file.name, up to 5 MB. Upload stores the source file only; it does not change business records or start workflows. Returns fileId as id, worksheets, headers and samples. Use match_inventory_file next.", object({ spaceId: string, file: values }, ["file"])],
   ["get_inventory_file", "Read an uploaded spreadsheet's worksheet headers and samples within the authorized Space.", object({ fileId: string }, ["fileId"])],
   ["match_inventory_file", "Match spreadsheet headers and product records. Resolve exact product codes first, or unambiguous names; report row errors. Optional mapping uses zero-based column indices or null to ignore a field. Does not write business data.", object({ ...importArgs, linesOnly: { type: "boolean" } }, ["fileId"])],
@@ -80,6 +126,7 @@ const definitions = [
   ["get_ai_run", "Read AI task state, structured output and proposed changes.", object({ runId: string }, ["runId"])],
   ["list_errors", "Read processing errors for a Space.", object({ spaceId: string })],
   ["get_inventory_workspace", "Discover warehouse form IDs, managed fields, two workflows and recent stock movements in a Space. Use query_records to resolve warehouse and product IDs.", object({ spaceId: string })],
+  ["get_inventory_dashboard", "Read inventory analysis: monthly inbound/outbound trends, current low-stock alerts and monthly opening/closing balances, quantity turnover and signed reversal adjustments. from/to are inclusive YYYY-MM (up to 24 months); optional warehouseId, productId and unit filters. Quantities never mix units. This operation is read-only and uses the same report as the dashboard.", object({ spaceId: string, from: string, to: string, warehouseId: string, productId: string, unit: string })],
   ["get_inventory_request", "Read an inbound/outbound document, its product lines, current version and workflow events.", object({ recordId: string }, ["recordId"])],
   ["create_inventory_request", "Create one inbound/outbound document with all lines atomically. values: warehouse record ID, applicant, approver, optional type/applicationDate/notes/photos. lines: product catalog record ID (not stock ID), quantity, optional notes. Set submit=true to start approval. First inbound posting creates missing warehouse stock. No stock changes until approved and posted. Do not invent missing business values.", object({ spaceId: string, kind: { type: "string", enum: ["inbound", "outbound"] }, values, lines: inventoryLines, submit: { type: "boolean" }, actor: string }, ["kind", "values", "lines"])],
   ["update_inventory_request", "Replace a draft/rejected document's complete line list. Existing lines need id and version; omitted lines are deleted. Header values are a partial update. Workflow-managed fields cannot be edited.", object({ recordId: string, version, values, lines: inventoryLines }, ["recordId", "version", "values", "lines"])],
@@ -91,6 +138,10 @@ export const AGENT_TOOLS = definitions.map(([name, description, parameters]) => 
 const writes = new Set(["upload_attachment", "setup_inventory_workspace", "create_navigation_node", "update_navigation_node", "move_navigation_node", "delete_navigation_node", "mark_notification_read", "resolve_error", "create_ai_task", "update_ai_task", "delete_ai_task", "apply_ai_run", "retry_ai_run", "cancel_ai_run", "create_record", "update_record", "delete_record", "create_form", "update_form", "delete_form", "create_notification_rule", "update_notification_rule", "delete_notification_rule", "start_ai_task", "create_inventory_request", "update_inventory_request", "advance_inventory_request"]);
 writes.add("save_inventory_catalog");
 writes.add("execute_inventory_import");
+for (const operation of ["create_order", "update_order", "transition_order", "confirm_order_payment",
+  "record_order_invoice", "prepare_order_notification"]) writes.add(operation);
+writes.add("import_whatsapp_orders");
+const whatsappOperations = new Set(["get_whatsapp_status", "list_whatsapp_chats", "preview_whatsapp_import", "import_whatsapp_orders"]);
 export const isWriteOperation = (name) => writes.has(name);
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const stable = (value) => JSON.stringify(value, (_, item) => item && typeof item === "object" && !Array.isArray(item)
@@ -108,9 +159,9 @@ function argsFor(name, args) {
     Object.keys(args).some((key) => !Object.hasOwn(schema.properties, key)) ||
     schema.required.some((key) => !Object.hasOwn(args, key))) throw new AppError(400, "Invalid operation arguments.");
   for (const [key, value] of Object.entries(args)) {
-    const type = schema.properties[key].type;
+    const type = schema.properties[key].type, maxLength = schema.properties[key].maxLength ?? 1000;
     if (schema.properties[key].enum && !schema.properties[key].enum.includes(value) || type === "boolean" && typeof value !== "boolean") throw new AppError(400, `Invalid ${key}.`);
-    if ((type === "string" && (typeof value !== "string" || (key !== "q" && !value.trim()) || value.length > 1000)) ||
+    if ((type === "string" && (typeof value !== "string" || (key !== "q" && !value.trim()) || value.length > maxLength)) ||
       (type === "integer" && (!Number.isSafeInteger(value) || value < (schema.properties[key].minimum ?? 0))) ||
       (type === "object" && (!value || typeof value !== "object" || Array.isArray(value))) ||
       (type === "array" && !Array.isArray(value))) throw new AppError(400, `Invalid ${key}.`);
@@ -186,8 +237,9 @@ export function createAgentOperations(store) {
   const adminOperations = new Set([
     "create_form", "update_form", "delete_form", "create_record", "update_record", "delete_record",
     "create_navigation_node", "update_navigation_node", "move_navigation_node", "delete_navigation_node",
-    "resolve_error", "setup_inventory_workspace", "create_ai_task", "update_ai_task", "delete_ai_task", "apply_ai_run",
+    "resolve_error", "setup_inventory_workspace", "save_inventory_catalog", "create_ai_task", "update_ai_task", "delete_ai_task", "apply_ai_run",
     "create_notification_rule", "update_notification_rule", "delete_notification_rule",
+    ...whatsappOperations,
   ]);
   function requireOperationPermission(operation) {
     if (adminOperations.has(operation) && hasAuthUser() && !isAdmin()) throw new AppError(403, "Administrator permission is required for this operation.");
@@ -213,8 +265,30 @@ export function createAgentOperations(store) {
     if (user.role !== "admin" && action.userId !== user.id) throw new AppError(404, "Action not found.");
   }
   const recordFingerprint = (formId) => hash(stable(store.listRecords(formId).map(({ id, version, values }) => ({ id, version, values })).sort((a, b) => a.id.localeCompare(b.id))));
+  function orderService() {
+    if (!store.orders) throw new AppError(503, "The order service is not available.");
+    return store.orders;
+  }
   function execute(operation, args) {
+    if (orderOperations.has(operation)) {
+      const service = orderService(), { orderId, ...body } = args;
+      switch (operation) {
+        case "list_orders": return service.list(args.spaceId);
+        case "get_order": return service.get(orderId);
+        case "parse_customer_order": return service.extract(body);
+        case "create_order": return service.create(body);
+        case "update_order": return service.update(orderId, body);
+        case "transition_order": return service.transition(orderId, body);
+        case "confirm_order_payment": return service.confirmPayment(orderId, body);
+        case "record_order_invoice": return service.invoice(orderId, body);
+        case "prepare_order_notification": return service.notification(orderId, body);
+      }
+    }
     switch (operation) {
+      case "get_whatsapp_status": return store.whatsapp.status();
+      case "list_whatsapp_chats": return store.whatsapp.chats(args);
+      case "preview_whatsapp_import": return store.whatsapp.previewImport(args);
+      case "import_whatsapp_orders": return store.whatsapp.importMessages(args);
       case "upload_inventory_file": return store.warehouseImports.upload(args);
       case "get_inventory_file": return store.warehouseImports.info(args.fileId);
       case "match_inventory_file": return store.warehouseImports.match(args);
@@ -272,6 +346,7 @@ export function createAgentOperations(store) {
       case "get_ai_run": return store.tasks.run(args.runId);
       case "list_errors": return store.automation.errors(args.spaceId);
       case "get_inventory_workspace": return store.warehouse.state(args.spaceId);
+      case "get_inventory_dashboard": return store.warehouseDashboard.report(args);
       case "get_inventory_request": return store.warehouse.document(args.recordId);
       case "create_inventory_request": return store.warehouse.createDocument(args);
       case "update_inventory_request": return store.warehouse.updateDocument(args.recordId, args);
@@ -323,6 +398,7 @@ export function createAgentOperations(store) {
       formId: form.id, recordId: before?.id ?? null, diff, noChange: result.changed === false };
   }
   function operationSpace(args) {
+    if (args.orderId) return orderService().get(args.orderId).spaceId;
     if (args.fileId) return store.warehouseImports.info(args.fileId).spaceId;
     if (args.attachmentId) return store.files.info(args.attachmentId).spaceId;
     if (args.nodeId) return store.spaces.node(args.nodeId).spaceId;
@@ -360,7 +436,9 @@ export function createAgentOperations(store) {
   }
   return {
     tools() {
-      return isAdmin() ? AGENT_TOOLS : AGENT_TOOLS.filter(tool => !adminOperations.has(tool.function.name));
+      return AGENT_TOOLS.filter(tool => (store.orders || !orderOperations.has(tool.function.name)) &&
+        (store.whatsapp || !whatsappOperations.has(tool.function.name)) &&
+        (isAdmin() || !adminOperations.has(tool.function.name)));
     },
     getMode() {
       return repo.getSetting(`assistant-mode${currentUserId() ? `:${currentUserId()}` : ""}`, "review");
@@ -409,6 +487,13 @@ export function createAgentOperations(store) {
       if (actor?.userId) ownerUser(actor.userId);
       const token = actor.type === "token" ? repo.getToken(actor.id) : null;
       if (token?.revokedAt) throw new AppError(401, "Agent token is invalid or revoked.");
+      if (["list_orders", "parse_customer_order", "create_order"].includes(operation) || whatsappOperations.has(operation)) {
+        args.spaceId ??= actor.type === "token" ? actor.spaceId ?? "default" : ORDER_SPACE_ID;
+      }
+      if (whatsappOperations.has(operation)) {
+        if (!store.whatsapp) throw new AppError(503, "The WhatsApp bridge is not available.");
+        if (args.spaceId !== ORDER_SPACE_ID) throw new AppError(403, "WhatsApp order imports belong to the Order Management Space.");
+      }
       if (operation === "delete_form" && typeof requestKey === "string" && requestKey.trim() && requestKey.length <= 200) {
         const existing = repo.findAction(actor.id, requestKey);
         if (existing) {
@@ -418,8 +503,9 @@ export function createAgentOperations(store) {
       }
       if (actor.type === "token") {
         const allowed = actor.spaceId ?? "default";
+        if ((orderOperations.has(operation) || whatsappOperations.has(operation)) && allowed !== ORDER_SPACE_ID) throw new AppError(403, "This Agent token belongs to another Space.");
         if (["save_inventory_catalog", "upload_inventory_file"].includes(operation)) args.spaceId ??= allowed;
-        if (["upload_attachment", "setup_inventory_workspace", "list_navigation", "create_navigation_node", "list_notifications", "mark_notification_read", "resolve_error", "list_ai_runs", "list_forms", "list_notification_rules", "list_ai_tasks", "list_errors", "get_inventory_workspace", "create_inventory_request"].includes(operation)) args.spaceId ??= allowed;
+        if (["upload_attachment", "setup_inventory_workspace", "list_navigation", "create_navigation_node", "list_notifications", "mark_notification_read", "resolve_error", "list_ai_runs", "list_forms", "list_notification_rules", "list_ai_tasks", "list_errors", "get_inventory_workspace", "get_inventory_dashboard", "create_inventory_request"].includes(operation)) args.spaceId ??= allowed;
         if (operation === "create_form") args.spaceId ??= allowed;
         if (operation !== "list_spaces" && (operationSpace(args) !== allowed || args.spaceId && args.spaceId !== allowed)) throw new AppError(403, "This Agent token belongs to another Space.");
         if (operation === "list_spaces") return [store.spaces.get(allowed)];

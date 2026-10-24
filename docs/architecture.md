@@ -3,13 +3,16 @@
 ## Runtime
 
 ```text
-Browser: generic forms / warehouse / assistant
+Browser: generic forms / orders / warehouse / assistant
     |
 src/server.js: local routes, security checks, explicit asset allowlist
     |-- auth.js: local accounts, password/session verification and role context
     |-- agent-http.js / agent-operations.js: scoped Agent operations
+    |-- order-system.js / order-ai.js: shared order forms, fixed workflows and pending-review extraction
+    |-- whatsapp-bridge.js: optional administrator-selected, read-only WhatsApp intake
     |-- warehouse-system.js: fixed workflows and stock movements
     |-- warehouse-import.js: scoped spreadsheets, matching and atomic workflow batches
+    |-- warehouse-dashboard.js: read-only ledger snapshots, unit-safe trends and alerts
     |-- form-deletion.js: impact, dependencies and confirmation
     |-- table-import.js / import-drafts.js: spreadsheet imports
     |-- ai-tasks.js: structured processing queue and reviewed writeback
@@ -18,8 +21,8 @@ src/server.js: local routes, security checks, explicit asset allowlist
 
 Warehouse totals, line states, balances and transitions live in one module, called by
 both UI routes and Agent tools. Store hooks enforce protected balances, statuses,
-core-field definitions and history. Members use single-use catalog/document service
-permits; administrators can maintain records/custom fields within the same business
+core-field definitions and history. Members use single-use document workflow
+permits; administrators maintain catalogs, records/custom fields within the same business
 constraints. Product IDs are independent of warehouse
 stock IDs; first inbound posting creates a stock row. See [warehouse.md](warehouse.md).
 
@@ -37,7 +40,8 @@ the user's sessions. Administrators manage accounts, and the last active adminis
 cannot be disabled or demoted. Users can change their own password or sign out.
 
 Administrators manage forms, generic records, navigation, provider/task/rule settings
-and users. Members read shared data and use warehouse/catalog operations, notifications,
+and users, product/warehouse catalogs and stock settings. Members read shared data and
+inventory analysis and use warehouse request operations, notifications,
 configured AI task runs and their assistant/tokens. A request's applicant and workflow
 actor come from the authenticated account; approval/rejection requires the assigned
 active approver. Roles do not bypass protected warehouse state or stock checks.
@@ -48,6 +52,12 @@ owner's current permissions instead of borrowing the confirming administrator's 
 Review/full access controls confirmation, not authorization. Ownerless legacy tokens
 cannot authenticate after account setup. Conversations and proposals are owner-bound;
 members access their own, while administrators can manage them across users.
+
+The dashboard reads the full movement ledger through one computation shared by the
+browser and `get_inventory_dashboard` Agent operation. It does not persist derived
+statistics or grant editing access. Month snapshots use posting dates and signed
+reversals; current alerts use live stock records, and quantities stay unit-filtered.
+See [dashboard calculations](inventory-dashboard.md).
 
 ## Forms and Deletion
 
@@ -87,12 +97,49 @@ document transitions as the UI. A failure rolls back every request in the batch.
 
 ## Retired Modules
 
-Old order, meeting, supplier and recipe/purchase logic is not loaded by the active
+Old order, supplier and recipe/purchase logic, and the old meeting prototype, are not loaded by the active
 server. Source is isolated under `future/cross-form-automation/`; historical docs/tests
 are under `future/legacy-modules/`. Maintenance backs up SQLite before retiring registered
 templates, preserving custom forms, current warehouse data and secrets. Historical
 business rows are not physically purged. Saved cross-form rules remain dormant and
 `/api/automations` is retired (410); no runtime flag re-enables the archived engine.
+
+## Meeting Tasks
+
+The new meeting workflow is implemented separately in `meeting-tasks.js` and
+`meeting-ai.js`. Server initialization idempotently creates a `meeting-tasks`
+Space and a protected Tasks form. AI calls use the workspace provider, run outside
+SQLite transactions, and validate exact source quotes and typed task values.
+Authorization and schema version are rechecked before atomic record/history writes.
+Content hashes and in-flight request keys prevent repeated imports from creating
+duplicate tasks. The retired `/api/meetings` routes remain unavailable.
+
+## Orders
+
+`order-system.js` owns independent orders, fulfillment transitions, payment/invoice
+entries, attachments and local message history. Product requests are notes, and the
+total amount is explicit. The service does not call warehouse operations or read the
+inventory catalog. Members access their own orders; administrators access all orders.
+UI and Agent operations share this contract, with version checks for existing-order
+writes.
+
+`order-system.js` owns three real shared forms and their lifecycle hooks, rather
+than a separate order record store. Ownership scopes generic queries, reference
+catalogs, activity and diagnostics. Member workflow permits and administrator
+generic edits share business validation. Startup migrates legacy orders
+transactionally without inferring receipt from old payment entries.
+
+`order-ai.js` classifies source-evidenced drafts with the workspace provider
+outside transactions. Import saves unreviewed orders with null amounts and
+one linked unchecked payment confirmation. A person manually enters the amount,
+reviews the order and separately confirms full receipt. Invoice registration
+is manual. See [orders.md](orders.md).
+
+The optional `whatsapp-bridge.js` starts a private, loopback-only helper on an
+explicit administrator request. It uses a verified external checkout, exact
+chat/message IDs, bounded reads and owner-scoped import plans. It never starts
+a WhatsApp browser on app initialization or exposes sending. Agent preview
+and approval call the same import workflow. See [whatsapp-bridge.md](whatsapp-bridge.md).
 
 ## Deployment
 

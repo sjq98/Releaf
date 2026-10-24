@@ -80,7 +80,7 @@ test("serves English UI, local icons and security headers without exposing sourc
   assert.match(await response.text(), /<html lang="en">/);
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
-  for (const path of ["/app.js", "/styles.css", "/vendor/lucide.js"]) assert.equal((await request(path)).status, 200);
+  for (const path of ["/app.js", "/table-pan.js", "/styles.css", "/vendor/lucide.js"]) assert.equal((await request(path)).status, 200);
   assert.equal((await request("/styles.css", "HEAD")).status, 200);
   assert.equal((await request("/favicon.ico")).status, 204);
   for (const path of ["/server.js", "/store.js", "/data/forms.sqlite", "/api/missing"]) {

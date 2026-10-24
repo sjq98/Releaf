@@ -100,7 +100,7 @@ test("deleting the last form gives an empty Space and does not recreate template
     assert.equal(store.bootstrap().form, null);
     assert.deepEqual(store.bootstrap().records, []);
     store.close(); store = createStore(filename);
-    assert.equal(store.listForms().length, 0);
+    assert.equal(store.listForms("default").length, 0);
     assert.deepEqual(store.spaces.tree(), []);
     assert.equal(store.createForm({ name: "Start again" }).name, "Start again");
   } finally { store.close(); rmSync(folder, { recursive: true, force: true }); }

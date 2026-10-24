@@ -17,9 +17,27 @@ Source: https://github.com/lucide-icons/lucide
 
 The browser serves the installed PDF.js main and worker bundles. Preserve their Apache-2.0 notices and the other packages' licenses when redistributing. Dependency licenses are included in the installed npm packages; `package-lock.json` records exact transitive versions. ExcelJS's UUID dependency is overridden to 11.1.1; its MIT license remains applicable.
 
+## Chart.js 4.6.1
+
+The inventory dashboard serves the installed `chart.js/dist/chart.umd.min.js` bundle
+locally. Chart.js is MIT licensed; preserve the package's LICENSE.md and bundle
+license header when redistributing. Source: https://github.com/chartjs/Chart.js
+
 ## Node.js and SQLite
 
 Node.js and its bundled dependencies carry their own notices. SQLite is provided through Node.js's built-in `node:sqlite` module. Consult the installed Node.js distribution's license and third-party notices when distributing a runtime.
+
+## Optional WhatsApp Connector
+
+The optional local bridge loads `whatsapp-digest-local` from a separate checkout
+at revision `a104fa2054fc4ce0b228fc3c68052e73e721afbf`. The upstream package is
+MIT-licensed and uses `whatsapp-web.js` and `qrcode`. It is not copied into this
+repository or bundled into the Releaf application dependencies. Keep the
+upstream checkout's license and installed dependency notices when distributing
+that optional component. Source: https://github.com/LevNyyon/whatsapp-digest-local
+
+It is an unofficial, browser-based connector, not Meta's official business API.
+Linked-device session files and WhatsApp message data must not be committed.
 
 ## Organizer Documentation
 

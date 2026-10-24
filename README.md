@@ -2,7 +2,7 @@
 
 The warehouse module provides a product catalog, stock, linked inbound/outbound documents and two fixed approval workflows. Its seven tables are read-only for members; administrators can maintain them within protected business constraints. UI and Agent use shared catalog/document workflows, including XLSX/CSV matching and atomic batch execution. See [warehouse guide and API](docs/warehouse.md). The former customizable cross-form automation is preserved separately as a [future-direction prototype](future/cross-form-automation/README.md), and is disabled in the active application.
 
-An English/Chinese SME warehouse workspace with custom forms, fixed inbound/outbound workflows and a review-first Agent API. Legacy order, meeting, supplier and recipe/purchase modules are retired. Use the [current user guide](docs/user-guide.md) and [form deletion guide](docs/form-deletion.md) for the active product.
+An English/Chinese SME workspace with independent order management, warehouse workflows, meeting-to-task import, custom forms and a review-first Agent API. The former order, supplier and recipe/purchase prototypes are retired. The new order module keeps product details in notes and runs independently of inventory. The new Meeting Tasks Space replaces the archived meeting prototype without re-enabling its legacy endpoints. Use the [current user guide](docs/user-guide.md) and [form deletion guide](docs/form-deletion.md) for the active product.
 
 This is a working local prototype for SDC Hackathon Domain 2. The application currently displays **Form Studio** as its workspace name. Competition documents, sponsor-platform evidence, and deployment are still in preparation; see the [submission checklist](submission/README.md).
 
@@ -45,6 +45,10 @@ The sustainability hypothesis is that reliable stock visibility could reduce avo
 ### Key Features
 
 - Fixed warehouse stock, linked inbound/outbound documents and two approval workflows.
+- Inventory analysis dashboard with monthly receipt/issue curves, live stock alerts, monthly balance/turnover reports and matching read-only Agent queries.
+- Independent order Space with real Orders, Payment confirmations and Invoices forms, pending AI intake, manual amount review, paid-in-full confirmation and pickup/delivery workflows. See [orders](docs/orders.md).
+- Optional administrator-only WhatsApp read bridge: explicitly selected chat, bounded message preview, source deduplication and review-first Agent imports. No message sending or automatic receipt/invoice confirmation. See [bridge setup](docs/whatsapp-bridge.md).
+- A separate Meeting Tasks Space: paste or import a UTF-8 TXT/Markdown summary and extract actionable commitments directly into the Tasks table, with source quotes, meeting history and duplicate protection. See [meeting tasks](docs/meeting-tasks.md).
 - Local accounts with administrator/member roles, authenticated approval identities and owner-bound Agent tokens.
 - Separate product catalog, protected warehouse writes, spreadsheet batch matching and assistant file uploads.
 - Nine field types, including same-Space references and image/PDF attachments, with required/unique constraints.
@@ -83,7 +87,11 @@ Open **http://127.0.0.1:5174**. In a POSIX shell, use `npm` instead of `npm.cmd`
 
 The first launch creates `data/forms.sqlite` and a generic **New form**. On the sign-in screen, create the first administrator with a username, display name and password of at least **12 characters**. There is no default password. Subsequent visits require sign-in. An administrator can add accounts, change roles, disable accounts and reset passwords under **Account > Manage users**; all users can change their own password or sign out. Sessions expire after seven days, and password/role/active-status changes invalidate that user's existing sessions.
 
-Administrators manage forms, fields, records, navigation, AI settings and users. Members read tables and use the catalog and warehouse workflows, including approval when assigned; they cannot edit table schemas or use generic record CRUD. Use **Warehouse workflows > Set up warehouse** as an administrator to install the warehouse system in a Space. Local data and credentials are excluded from Git. Deleting the last form does not regenerate a template. See [account and workflow details](docs/user-guide.md).
+Administrators manage forms, fields, records, product/warehouse catalogs, stock settings, navigation, AI settings and users. Members read tables and the dashboard and use warehouse request workflows, including approval when assigned; they cannot edit table schemas, maintain catalog records or use generic record CRUD. Use **Warehouse workflows > Set up warehouse** as an administrator to install the warehouse system in a Space. Local data and credentials are excluded from Git. Deleting the last form does not regenerate a template. See [account and workflow details](docs/user-guide.md).
+
+Select the **Order management** Space to use its three shared forms and fixed workflows. AI intake saves a pending order and one linked unchecked payment confirmation; a person reviews the order and enters the amount, then checks **Paid in full** after checking the actual wallet receipt. Invoices are registered manually. Members manage their own orders; administrators manage all orders and schemas within protected rules. Orders do not reserve or move inventory. An administrator can open **WhatsApp** for optional local connector setup and explicit selected-chat import; the app never connects or reads messages automatically.
+
+Open **Inventory analysis** for stock alerts and six-month reports. Optional synthetic demo data and its backup-first command are documented in the [dashboard guide](docs/inventory-dashboard.md).
 
 On Windows, you can also double-click `start-server.bat`, which fixes the port to **5174**. Use this port for local development and verification. If it is occupied, use the existing Releaf server or stop that server before restarting; do not launch another development server on a different port.
 
@@ -140,6 +148,7 @@ Browser HTML/CSS/JavaScript -> authenticated Node.js HTTP API -> local SQLite. F
 | Layer | Implementation |
 | --- | --- |
 | Frontend | HTML, CSS, native JavaScript modules, Lucide icons 1.60.0 |
+| Charts | Locally served Chart.js 4.6.1 |
 | Backend | Node.js standard library, native HTTP server |
 | Storage | Node.js built-in SQLite |
 | Import / documents | ExcelJS, csv-parse, PDF.js; Decimal.js for quantity arithmetic |

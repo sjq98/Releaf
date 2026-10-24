@@ -85,6 +85,31 @@ test("header mappings and product lookup reject ambiguity, mismatched names/unit
   assert.equal(imports.match({ fileId: hyphen.id, linesOnly: true }).documents[0].lines[0].product, distinct.id);
 });
 
+test("line import exposes every detail field and request headers with bilingual column matching", async t => {
+  const { imports, upload, tables, store, warehouse } = setup(t);
+  const file = await upload("商品编码,入库数量,单位,明细备注,申请人,审批人,申请编号,单据备注,申请日期,仓库编码\nP1,2,kg,Keep dry,Applicant,Manager,EXT-01,Delivery note,2026-10-24,WH001");
+  const plan = imports.match({ fileId: file.id, kind: "inbound", linesOnly: true });
+  assert.deepEqual(plan.errors, []);
+  const detail = store.getForm(tables.inboundLines);
+  for (const field of detail.fields) {
+    assert.ok(plan.mappingFields?.some(item => item.section === "lines" && item.fieldId === field.id && item.name === field.name), field.name);
+  }
+  for (const key of ["applicant", "approver", "group", "headerNotes", "applicationDate"]) {
+    assert.ok(plan.mappingFields.some(item => item.key === key), key);
+    assert.notEqual(plan.mapping[key], null, key);
+  }
+  assert.equal(plan.mapping.unit, 2);
+  assert.equal(plan.documents[0].values.warehouse, warehouse.id);
+  assert.equal(plan.documents[0].values.notes, "Delivery note");
+  assert.equal(plan.documents[0].values.approver, "Manager");
+  assert.equal(plan.documents[0].lines[0].notes, "Keep dry");
+  assert.equal(plan.requestValues.notes, "Delivery note");
+  assert.equal(plan.requestValues.approver, "Manager");
+  assert.equal(plan.mappingFields.find(item => item.section === "lines" && item.fieldId === "status").managed, true);
+  assert.equal(plan.mappingFields.find(item => item.key === "group").managed, false);
+  assert.equal(plan.mappingFields.find(item => item.key === "applicant").managed, true);
+});
+
 test("batch preview is unwritten; submit creates approval requests and equivalent mappings cannot duplicate them", async t => {
   const { store, imports, upload, args, tables, wh } = setup(t);
   const file = await upload("SKU,Quantity\nP1,4");

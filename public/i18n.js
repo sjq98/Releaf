@@ -16,6 +16,10 @@ export function t(message) {
 }
 
 const patterns = [
+  [/^(\d+) files$/, "$1 个文件"],
+  [/^(\d+) tasks$/, "$1 项任务"],
+  [/^AI provider returned HTTP (\d+)\. No records were saved\.$/, "AI 供应商返回 HTTP $1，未保存任何记录。"],
+  [/^This product uses (.+)\. Choose that unit or clear the product filter\.$/, "该商品使用 $1 单位，请选择此单位或清除商品筛选。"],
   [/^View (.+)$/, "查看 $1"],
   [/^Product was not found: (.+)$/, "未找到商品：$1"],
   [/^Product is ambiguous: (.+)$/, "存在同名商品，请使用商品编码：$1"],

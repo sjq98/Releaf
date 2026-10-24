@@ -23,7 +23,7 @@ function set(object, path, value) {
   if (value === undefined) delete parent[key]; else Object.defineProperty(parent, key, { value, writable: true, enumerable: true, configurable: true });
 }
 
-export function initWorkspace({ api, icons, toast, getState, refresh, navigate, showView, getDraft, onDraftChanged, deleteForm }) {
+export function initWorkspace({ api, icons, toast, getState, refresh, navigate, showView, getDraft, onDraftChanged, deleteForm, deleteSpace }) {
   const $ = (id) => document.getElementById(id);
   const formulas = initFormulaEditor({ api, icons, getState });
   let rules = [], tasks = [], runs = [], errors = [], editor, editorKind, busy = false, aiTab = "tasks";
@@ -86,7 +86,7 @@ export function initWorkspace({ api, icons, toast, getState, refresh, navigate, 
     if (!$("space-selector")) {
       const host = document.createElement("div");
       host.className = "space-picker";
-      host.innerHTML = html`<select id="space-selector" aria-label="Current Space"></select>${button('id="space-new"', "plus", "Create Space")}`;
+      host.innerHTML = html`<select id="space-selector" aria-label="Current Space"></select>${button('id="space-new"', "plus", "Create Space")}${button('id="space-delete"', "trash-2", "Delete Space")}`;
       document.querySelector(".sidebar-label").replaceWith(host);
       const tools = document.createElement("div");
       tools.className = "tree-tools";
@@ -94,21 +94,40 @@ export function initWorkspace({ api, icons, toast, getState, refresh, navigate, 
       host.after(tools);
       const fixed = document.createElement("nav");
       fixed.id = "space-tools";
-      fixed.innerHTML = html`<button class="nav-item space-tool" data-workspace-view="warehouse-flows">${icon("warehouse")}<span>Warehouse workflows</span></button><button class="nav-item space-tool" data-workspace-view="ai-tasks">${icon("sparkles")}<span>AI tasks</span></button><button class="nav-item space-tool" data-workspace-view="errors">${icon("circle-alert")}<span>Error Center</span><span class="nav-count" id="space-error-count"></span></button>`;
+      fixed.innerHTML = html`<button class="nav-item space-tool" data-workspace-view="meeting-tasks">${icon("clipboard-list")}<span>Meeting to tasks</span></button><button class="nav-item space-tool" data-workspace-view="orders">${icon("shopping-bag")}<span>Order management</span></button><button class="nav-item space-tool" data-workspace-view="inventory-dashboard">${icon("chart-no-axes-combined")}<span>Inventory analysis</span></button><button class="nav-item space-tool" data-workspace-view="warehouse-flows">${icon("warehouse")}<span>Warehouse workflows</span></button><button class="nav-item space-tool" data-workspace-view="ai-tasks">${icon("sparkles")}<span>AI tasks</span></button><button class="nav-item space-tool" data-workspace-view="errors">${icon("circle-alert")}<span>Error Center</span><span class="nav-count" id="space-error-count"></span></button>`;
       $("module-navigation").after(fixed);
       $("tree-new").onclick = () => openNode(null, null);
       $("space-new").onclick = () => openNode(null, null, true);
+      $("space-delete").classList.add("action-delete");
+      $("space-delete").onclick = () => { if (requireManagement()) deleteSpace(current().space.id); };
       $("space-selector").onchange = async () => {
         try {
-          const data = await api(`/api/forms?spaceId=${$("space-selector").value}`);
-          await navigate(data[0]?.id ?? null, "records", null, $("space-selector").value);
+          const spaceId = $("space-selector").value;
+          const data = await api(`/api/forms?spaceId=${spaceId}`);
+          if ($("space-selector").value !== spaceId) return;
+          const view = spaceId === current().orders?.spaceId ? "orders"
+            : spaceId === current().meetingTasks?.spaceId ? "meeting-tasks" : "records";
+          await navigate(data[0]?.id ?? null, view, null, spaceId);
         } catch (error) { toast(error.message, true); }
       };
     }
-    $("space-selector").innerHTML = (state.spaces ?? []).map((space) => opt(space.id, space.name, state.space?.id)).join("");
+    $("space-selector").innerHTML = (state.spaces ?? []).map((space) =>
+      opt(space.id, space.name, state.space?.id)).join("");
     $("space-new").hidden = !canManage();
+    $("space-delete").hidden = !canManage();
+    $("space-delete").disabled = (state.spaces ?? []).length <= 1;
+    setUIAttribute($("space-delete"), "title", $("space-delete").disabled ? "Keep at least one Space." : "Delete Space");
     $("tree-new").hidden = !canManage();
     $("space-error-count").textContent = state.errorCount || "";
+    $("space-tools").querySelectorAll("[data-workspace-view]").forEach(button => {
+      const view = button.dataset.workspaceView;
+      button.hidden = view === "meeting-tasks" ? !state.meetingTasks?.enabled
+        : view === "orders" ? !state.orders?.enabled
+        : ["inventory-dashboard", "warehouse-flows"].includes(view) && Boolean(state.meetingTasks?.enabled || state.orders?.enabled);
+      const selected = button.dataset.workspaceView === state.view;
+      button.classList.toggle("is-active", selected);
+      if (selected) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current");
+    });
     function branch(parentId, depth) {
       return nodes().filter((node) => (node.parentId ?? null) === parentId).map((node) => {
         const table = node.formId ? form(node.formId) : null;

@@ -57,10 +57,14 @@ test("user management exposes role-derived permissions and admin checks use asyn
   });
   assert.deepEqual(auth.permissions(regular), {
     manageUsers: false, manageForms: false, editRecords: false, manageSettings: false,
+    manageOrders: true,
   });
   assert.deepEqual(auth.permissions(setup.user), {
     manageUsers: true, manageForms: true, editRecords: true, manageSettings: true,
+    manageOrders: true,
   });
+  assert.equal(auth.permissions(null).manageOrders, false);
+  assert.equal(auth.permissions({ ...regular, active: false }).manageOrders, false);
   assert.equal(auth.listUsers().length, 2);
   assert.equal(auth.withUser(setup.user, () => auth.requireAdmin()).role, "admin");
   assert.throws(() => auth.withUser(regular, () => auth.requireAdmin()), { status: 403 });

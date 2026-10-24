@@ -15,15 +15,24 @@ Working notes for `SDC2026_TeamName_TechDeclaration.pdf`, reviewed on 2026-10-23
 | `pdfjs-dist` | 6.4.299 | Browser-side PDF page rendering | Apache-2.0 |
 | `decimal.js` | 10.6.0 | Decimal quantities and formula arithmetic | MIT |
 | `jsep` | 1.4.0 | Parse restricted formula expressions | MIT |
+| `chart.js` | 4.6.1 | Locally served inventory trend charts | MIT |
 | Git / GitHub | Repository `sjq98/Releaf` | Version control and source hosting | Service terms; no application dependency |
 
-The project has six direct npm dependencies. ExcelJS's UUID dependency is overridden to 11.1.1; see the lockfile for the full dependency graph. No Python package or GPU runtime is required to run the app.
+The project has seven direct npm dependencies. ExcelJS's UUID dependency is overridden to 11.1.1; see the lockfile for the full dependency graph. No Python package or GPU runtime is required to run the app.
+
+The optional WhatsApp bridge (added October 24, 2026) loads a separate
+`whatsapp-digest-local` checkout pinned to
+`a104fa2054fc4ce0b228fc3c68052e73e721afbf` (MIT), using that checkout's
+`whatsapp-web.js` and `qrcode` dependencies. It is not an eighth direct Releaf
+dependency. Record this external component in the final declaration when used.
+Only mock-account integration has been verified; installation is not evidence
+of a real linked account, delivered messages, or official WhatsApp API usage.
 
 ## External APIs and Models
 
 The app supports independently configured workspace AI-task and chat-assistant providers. Both use model discovery and compatible Chat Completions; tasks require strict JSON schema, while the assistant requires function/tool calling. It has no fixed production provider or bundled model. Record the actual provider, model ID/version, access tier, and applicable terms used by the team when preparing the declaration. Do not copy keys or Agent tokens into any document.
 
-Legacy meeting extraction, supplier recognition/reconciliation and recipe/purchase inventory modules are retired. Their source is retained only in the independent `future/` snapshot and is not served by the active app. Fixed warehouse calculations do not call AI.
+Legacy meeting extraction, supplier recognition/reconciliation and recipe/purchase inventory modules are retired. Their source is retained only in the independent `future/` snapshot and is not served by the active app. The new `meeting-ai.js` and `meeting-tasks.js` use the workspace provider for direct summary-to-task import in a separate Space, with strict typed output, exact-quote validation and transactional writes. Fixed warehouse calculations do not call AI.
 
 Configurable AI tasks also use the workspace provider with per-task model selection. Selected record fields and attachment pages form the input; a strict destination-field schema controls output. Tasks can require review or automatically apply valid results. Models are not permitted to return executable code or arbitrary database operations.
 
