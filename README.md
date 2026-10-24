@@ -193,12 +193,15 @@ The default `main` server binds to `127.0.0.1`. The separate [`deploy/render` so
 
 ## Team
 
-The signed proposal names Lin Jiarun as leader and declares five members. The other names, individual contributions and GitHub handles were not supplied and are not inferred from repository accounts.
+The signed proposal names Lin Jiarun as leader and declares five members. The confirmed team members and contributions are listed below. One additional member's details and individual GitHub handles remain to be supplied and are not inferred from repository accounts.
 
 | Name | Role / contribution | GitHub |
 | --- | --- | --- |
 | Lin Jiarun | Team leader | Not supplied |
-| Four additional members | Individual roster/contributions require confirmation | Not supplied |
+| SHAO JUNQIN | Technical Director and primary developer. Originated the overall product concept and technical direction, led the application architecture, and built the core Releaf application, including inventory management, order management, meeting-task workflows and Agent API integration. | Not supplied |
+| ZHANG WEIYU | Product ideation support. Contributed ideas and feedback to help refine the product concept and explore solution approaches during product planning. | Not supplied |
+| SHI BOWEI | Pitch presentation and logistics support. Prepared pitch-deck materials and provided supporting presentation and logistical work for the team's project showcase. | Not supplied |
+| One additional member | Name and individual contribution require confirmation | Not supplied |
 
 ## Submission Checklist
 
