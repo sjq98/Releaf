@@ -1,6 +1,22 @@
 # Submission Requirements
 
-Reviewed on 2026-10-22 (Asia/Singapore). This is a preparation checklist, not a claim that the submission is complete.
+Rechecked on 2026-10-25 (Asia/Singapore). This is a requirements checklist, not a claim that portal submission is complete.
+
+## Final Operational Check
+
+The current [official Participant Handbook](https://drive.google.com/file/d/1fGBS-jevDj_FrF8wsbYNPzyU5TTrfk1V/view), linked from the organizer's participant-resource Drive, was checked on 25 October 2026. Its operational instructions clarify the older preparation notes below:
+
+- Section 6.3.1, PDF page 10: preliminary cutoff **25 October 2026, 07:59:59 AM MYT (UTC+8)**. The current [homepage](https://sdchack.my/) agrees to the minute; do not rely on the conflicting 23:59 tutorial subtitle.
+- Section 6.3.5.6, PDF page 13: a **5-7 minute YouTube pitching video including prototype demonstration**.
+- Section 9.2, PDF page 28: every team must use Replit as part of its solution.
+- Section 9.3, PDF page 28: RunPod is required for work needing a GPU, including relevant training, fine-tuning and inference.
+- Sections 10.6-10.7, PDF pages 28-29: own-account Replit proof and, for teams that used RunPod, their own dashboard or Serverless endpoint evidence. Replit proof should appear in the technical declaration; the supplied evidence is appended.
+- The generic GitHub template still lists both platform PDFs. The handbook's conditional language does not explicitly settle GPU-backed third-party hosted APIs. No RunPod use, proof, separate declaration or organizer-approved exemption is claimed for Releaf.
+- The [Domain 2 brief](https://sdchack.my/) permits synthetic data and simulated account/permission layers without live Orbyte access. This is not evidence that sponsor API integration has been completed.
+
+The [official Terms and Conditions](https://sdchack.my/legal/terms-2026-08-21.pdf), sections 6.1.1 and 6.3.2, designate `sdchack.my` and its timestamp for submission. Section 6.6 restricts repository changes after the cutoff unless instructed by the organizer. The leader must submit through the [team portal](https://sdchack.my/login); a GitHub push is not that action.
+
+Releaf's live URL is `https://releaf-prometheusjens.replit.app`. It has been filled into the technical declaration. The page is reachable, but authentication returned a 403 configured-address error during verification; functional judge access still needs checking. The source is `https://github.com/sjq98/Releaf`, and the video is `https://youtu.be/8xv9_2mSclk`.
 
 ## Primary Sources
 
@@ -26,7 +42,7 @@ The organizer's README lists these files under `submission/`; replace `TeamName`
 
 Its checklist also requests team/domain/SDG details, slides and demo-video links, verified run instructions, and a repository free of secrets. The README supplies fields for leader, university, team size, member roles, project overview, features, architecture, technology stack, lessons, improvements, repository, Replit, live demo, and RunPod endpoint links.
 
-Both platform-use sections are explicitly marked **Required**. They share a template covering Domain 1 and Domain 2; no Domain 2 exemption appears there. Evidence must document actual use. Source: organizer's README.
+Both platform-use sections are marked **Required** in the generic README. The current Participant Handbook gives the more specific conditional RunPod instructions summarized above. Evidence must document actual use; a missing proof cannot be replaced by a sample screenshot. Releaf includes no RunPod file, as requested by the team.
 
 ## Repository Preparation Review
 
@@ -84,7 +100,9 @@ Use [technical-inventory.md](technical-inventory.md) for verified implementation
 
 Python, Flask/FastAPI, the sample handler, and the sample folder tree illustrate an implementation. The README does not establish a mandatory Python stack. Retaining this project's Node.js implementation is consistent with that evidence.
 
-## Unresolved Rules
+## Earlier Preparation Questions
+
+The final operational check above resolves the deadline, channel and video duration questions in this older checklist. Private announcements, the authenticated portal and team-only facts still require team confirmation.
 
 - The preliminary PDF supplies the date above, but no exact cutoff time/timezone or actual submission channel was established from these files.
 - The technical declaration explicitly allows a public repository or access granted to judges; publicity is not established as mandatory.

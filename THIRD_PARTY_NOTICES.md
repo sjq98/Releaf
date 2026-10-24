@@ -23,6 +23,12 @@ The inventory dashboard serves the installed `chart.js/dist/chart.umd.min.js` bu
 locally. Chart.js is MIT licensed; preserve the package's LICENSE.md and bundle
 license header when redistributing. Source: https://github.com/chartjs/Chart.js
 
+## jsep 1.4.0
+
+The restricted formula and condition parser uses jsep 1.4.0, MIT licensed.
+Preserve the installed package's license when redistributing.
+Source: https://github.com/EricSmekens/jsep
+
 ## Node.js and SQLite
 
 Node.js and its bundled dependencies carry their own notices. SQLite is provided through Node.js's built-in `node:sqlite` module. Consult the installed Node.js distribution's license and third-party notices when distributing a runtime.

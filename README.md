@@ -4,19 +4,20 @@ The warehouse module provides a product catalog, stock, linked inbound/outbound 
 
 An English/Chinese SME workspace with independent order management, warehouse workflows, meeting-to-task import, custom forms and a review-first Agent API. The former order, supplier and recipe/purchase prototypes are retired. The new order module keeps product details in notes and runs independently of inventory. The new Meeting Tasks Space replaces the archived meeting prototype without re-enabling its legacy endpoints. Use the [current user guide](docs/user-guide.md) and [form deletion guide](docs/form-deletion.md) for the active product.
 
-This is a working local prototype for SDC Hackathon Domain 2. The application currently displays **Form Studio** as its workspace name. Competition documents, sponsor-platform evidence, and deployment are still in preparation; see the [submission checklist](submission/README.md).
+This is Releaf's SDC Hackathon 2026 submission repository for **Domain 2 - Orbyte Smart SME Challenge**. The interface is branded **Releaf**. The [pitch deck](submission/SDC2026_Releaf_Pitch_Deck.pdf), [proposal](submission/SDC2026_Releaf_Preliminary.pdf), [technical declaration](submission/SDC2026_Releaf_TechDeclaration.pdf) and [Replit evidence](submission/SDC2026_Releaf_Replit_POU.pdf) are in `submission/`. See the [submission status](submission/README.md) for remaining factual checks; a GitHub push is not the organizer's portal submission.
 
 ## Team Information
 
 | Field | Details |
 | --- | --- |
 | Project | Releaf |
-| Team name | Pending confirmation; project and team names may differ |
-| Domain | Domain 2 |
-| SDG track | Pending confirmation; no impact measurement has been completed |
-| Team leader and members | Pending confirmation |
-| University | Xiamen University Malaysia; confirm all members' affiliations |
-| Number of members | Pending confirmation |
+| Team name | Releaf |
+| Domain | Domain 2 - Orbyte Smart SME Challenge |
+| SDG track | SDG 8; primary target 8.3, supporting target 8.2 |
+| Team leader | Lin Jiarun |
+| University | Xiamen University Malaysia |
+| Number of members | 5, as declared in the supplied proposal |
+| Contact | See signed PDFs; their leader email digits differ and require confirmation |
 
 ## Links
 
@@ -24,11 +25,11 @@ This is a working local prototype for SDC Hackathon Domain 2. The application cu
 | --- | --- |
 | Repository | https://github.com/sjq98/Releaf |
 | Local application | http://127.0.0.1:5174 after starting the server |
-| Replit project | Pending; no Replit project URL supplied |
-| Live demo | Pending; local application only |
-| RunPod endpoint | Pending; no RunPod integration or usage evidence supplied |
-| Slide deck | Pending |
-| Demo video | Pending |
+| Replit proof | [Own-account usage and project screenshots](submission/SDC2026_Releaf_Replit_POU.pdf) |
+| Live prototype | https://releaf-prometheusjens.replit.app - page reachable; authentication configuration still being verified |
+| RunPod endpoint | Not used; no team RunPod endpoint or proof supplied |
+| Slide deck | [Pitch deck PDF](submission/SDC2026_Releaf_Pitch_Deck.pdf) |
+| Demo video | https://youtu.be/8xv9_2mSclk - approximately 5 minutes 35 seconds |
 
 ## Overview
 
@@ -40,7 +41,7 @@ Small businesses often track stock and warehouse requests in disconnected spread
 
 Releaf connects stock, warehouse documents and their detail lines through fixed approval and posting workflows. Only posted documents change stock; shortage checks and reversals preserve ledger consistency. A floating assistant and independent Agent tokens use the same business validations as the UI. Custom forms, spreadsheet import, typed AI tasks and field-level history support additional work without bypassing warehouse rules.
 
-The sustainability hypothesis is that reliable stock visibility could reduce avoidable over-ordering and waste. Environmental benefits, an SDG sub-target, a baseline, and an impact target must still be established and measured.
+Releaf targets **SDG 8.3**, supporting productive activities and micro-, small- and medium-sized enterprises, with **8.2** as a supporting productivity target. See the [United Nations Goal 8 targets](https://sdgs.un.org/goals/goal8). The proposal uses an explicitly illustrative baseline: 40 movements/week at 6 minutes each gives 4 hours/week. A proposed pilot target is 60% less handling time; this is not an achieved result. No customer pilot, observed time saving, reduction in stock discrepancies or environmental benefit has yet been measured.
 
 ### Key Features
 
@@ -68,7 +69,13 @@ The sustainability hypothesis is that reliable stock visibility could reduce avo
 - Error Center with source/category/date/status filters, failed-step details, retry, resolve and ignore.
 - Configurable asynchronous AI tasks with selected inputs, typed output fields, mappings, review/automatic writeback and stale-input protection.
 
-This is an independent prototype, not yet integrated with Orbyte APIs or Orbyte authentication. Scheduled reminders, production planning, billing and public multi-user deployment are not implemented. Old business modules are no longer loaded or served; their source remains only in the independent future-direction snapshot.
+This is an independent prototype, not yet integrated with Orbyte APIs or Orbyte authentication. Orbyte summaries can be pasted or imported, but there is no direct connector. Scheduled reminders, production planning, billing and production tenant isolation are not implemented. The Replit hosting URL is supplied; public availability needs verification. Old business modules are no longer loaded or served; their source remains only in the independent future-direction snapshot.
+
+### Existing Agent API
+
+The source defines **64 Agent tool operations**, not 64 separate HTTP paths. The [complete categorized inventory](docs/agent-tool-inventory.md) lists all 64 directly from `AGENT_TOOLS`. Discovery uses `GET /api/agent/tools`; execution uses `POST /api/agent/operations`. Additional REST routes and OpenAPI discovery are described in the [API guide](docs/agent-api.md).
+
+Operations cover tables and records, inventory workflows and analysis, spreadsheet import, orders/payments/invoices, selected-chat WhatsApp intake, navigation, notifications, AI processing and errors. Availability follows the token owner's current role and Space. Dedicated external-Agent meeting extraction/import is future work; generic task-table CRUD is not a dedicated meeting-import API.
 
 ## How to Run
 
@@ -115,6 +122,8 @@ npm.cmd run dev
 
 Tests use in-memory or temporary databases and mock provider responses. They do not verify a live AI service, sponsor usage, or Orbyte integration.
 
+Submission verification on 25 October 2026: `npm ci --ignore-scripts` succeeded and `npm test` passed **319/319** tests from a clean worktree of the submitted `main` application code. No product source changes were made during submission packaging.
+
 Automated verification uses mocked AI providers and isolated data; browser checks cover desktop and mobile. The suite also retains explicitly archived prototype regression tests. Run `npm.cmd test` for the current summary. A passing suite is not a production-security certification or verification of a live model provider.
 
 ## Project Structure
@@ -128,7 +137,7 @@ Automated verification uses mocked AI providers and isolated data; browser check
 |-- future/                 # Independent historical prototypes, not loaded by the app
 |-- scripts/                # Backup-first local maintenance
 |-- examples/               # Historical synthetic sample input
-|-- submission/             # Submission checklist; final PDFs are pending
+|-- submission/             # Pitch deck, signed forms, Replit proof and status
 |-- start-server.bat        # Windows launcher fixed to port 5174
 |-- GLOSSARY.md             # Business terminology and historical design context
 |-- .env.example            # Configuration names without credentials
@@ -153,19 +162,19 @@ Browser HTML/CSS/JavaScript -> authenticated Node.js HTTP API -> local SQLite. F
 | Storage | Node.js built-in SQLite |
 | Import / documents | ExcelJS, csv-parse, PDF.js; Decimal.js for quantity arithmetic |
 | Rules / formulas | Restricted jsep expressions, Decimal.js arithmetic, fixed warehouse transactions and same-form notifications |
-| AI | Configurable compatible provider; no model bundled |
-| Hosting | Local loopback server at present |
+| AI | Configurable compatible provider; demo uses DeepSeek `deepseek-flash`; no model bundled |
+| Hosting | `main` runs locally; hosted configuration is published on the `deploy/render` branch; Replit live URL above |
 | Testing | Built-in Node.js test runner |
 
 See [architecture](docs/architecture.md) and the [technical inventory](docs/technical-inventory.md).
 
 ## How We Use Replit
 
-Pending. This repository does not yet establish actual Replit usage or include its proof PDF. The organizer's online template marks this platform and proof of use as required; confirm any domain-specific exception with the organizer.
+The supplied [Replit proof](submission/SDC2026_Releaf_Replit_POU.pdf) shows the team's account usage and Agent/project work used for planning and collaboration. It is also appended to the technical declaration. The team supplied `https://releaf-prometheusjens.replit.app` for hosting. The page is reachable, but its authentication status API returned 403 during verification. The configured public URL and functional judge access must be checked. Development-platform usage alone is not claimed as product-level Replit API integration.
 
 ## How We Use RunPod
 
-Pending. The current prototype calls a configurable AI API and has no RunPod-specific client or serverless handler. Do not treat a compatible API URL alone as proof of RunPod usage.
+RunPod was not used; the prototype calls a configurable hosted AI API and has no RunPod-specific client, team Pod or Serverless endpoint. No RunPod declaration, example proof or placeholder PDF is included. The Participant Handbook sections 9.3 and 10.7 link RunPod and its evidence to GPU work/teams that used it; the generic repository template lists its proof as required. No organizer-approved exception for hosted model APIs is claimed. See [requirements](docs/submission-requirements.md).
 
 ## Challenges and Learnings
 
@@ -173,37 +182,41 @@ The implementation keeps record IDs stable when labels change, validates schema 
 
 ## Future Improvements
 
-- Confirm team information, SDG sub-target, and quantitative impact baseline.
-- Validate the workflow with an SME and measure a relevant process KPI.
-- Confirm Orbyte integration access and implement an agreed interface.
-- Complete required sponsor-platform usage and collect genuine evidence.
-- Prepare judge-accessible deployment, slides, demo video, and signed PDFs.
+- Complete API business logic and end-to-end workflow coverage.
+- Add dedicated meeting-task extraction/import operations for external Agents.
+- Standardize request/error contracts and strengthen permission, retry and failure tests.
+- Validate public deployment, secure secrets, improve backup/retention controls and add tenant isolation.
+- Pilot with an SME, establish an observed baseline and measure handling time and stock discrepancy.
+- Evaluate an Orbyte connector once its agreed API/authentication interface is available.
 
-The server binds to `127.0.0.1`. Browser APIs require a login session; external Agent endpoints require a token and enforce its owner's current role. Accounts share the local workspace rather than isolated tenants. Judge-facing cloud deployment still needs tenant ownership boundaries, TLS, a deployment-specific Host/proxy policy and production secret storage before exposure.
+The default `main` server binds to `127.0.0.1`. The separate [`deploy/render` source branch](https://github.com/sjq98/Releaf/tree/deploy/render) adds HTTPS-origin/Host checks and hosted administrator bootstrap; submission packaging does not modify that deployment branch. Browser APIs require login; external Agent endpoints require an owner-bound token. This is a shared demo workspace, not tenant-isolated production software. Hosted configuration, secrets, persistence and functional access require verification before using sensitive data.
 
 ## Team
 
-The team roster has not been supplied. Replace this placeholder with one row per confirmed member before competition submission.
+The signed proposal names Lin Jiarun as leader and declares five members. The other names, individual contributions and GitHub handles were not supplied and are not inferred from repository accounts.
 
 | Name | Role / contribution | GitHub |
 | --- | --- | --- |
-| Pending confirmation | Pending confirmation | Pending confirmation |
+| Lin Jiarun | Team leader | Not supplied |
+| Four additional members | Individual roster/contributions require confirmation | Not supplied |
 
 ## Submission Checklist
 
-This GitHub update preserves the current prototype; it is not the final competition submission.
+The repository contains the supplied submission artifacts. The organizer's portal submission is a separate action by the team leader.
 
-- [ ] Confirm team roster, leader, contacts, domain and SDG track.
-- [ ] Complete and sign `submission/SDC2026_TeamName_Preliminary.pdf`.
-- [ ] Complete and sign `submission/SDC2026_TeamName_TechDeclaration.pdf`.
-- [ ] Provide genuine `submission/SDC2026_TeamName_Replit_POU.pdf`.
-- [ ] Provide genuine `submission/SDC2026_TeamName_Runpod_POU.pdf`.
-- [ ] Add judge-accessible deployment, slide-deck and demo-video links.
-- [ ] Verify sponsor-platform usage and any domain-specific exceptions.
-- [ ] Complete final clean-checkout, credentials and artifact checks.
+- [x] Record declared team, leader, university, size, domain and SDG targets.
+- [x] Include the proposal with the supplied handwritten signature/date.
+- [x] Include the technical declaration with the supplied signature/date and Replit appendix.
+- [x] Include genuine supplied Replit proof.
+- [x] Include pitch deck PDF and accessible YouTube demo link.
+- [x] Fill the supplied Live Prototype URL.
+- [ ] Verify the deployment is reachable and usable by judges.
+- [ ] Confirm leader email and individual member/role/GitHub details.
+- [ ] Have the leader review corrected forms and confirm eligibility/IP attestations.
+- [ ] Resolve applicable sponsor requirements; no RunPod proof is claimed.
 - [ ] Complete the organizer's submission step.
 
-Replace `TeamName` with the confirmed team name. See [submission preparation](submission/README.md) and [requirements](docs/submission-requirements.md) for word limits, deadlines and unresolved items. Blank templates and sample platform proofs are not included as completed team deliverables.
+See [submission preparation](submission/README.md) and [requirements](docs/submission-requirements.md) for word limits, deadline and remaining checks. Blank templates and sample proofs are not represented as completed deliverables.
 
 ## License
 
