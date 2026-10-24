@@ -23,10 +23,12 @@ if errorlevel 1 (
     goto :failed
 )
 
-node -e "for (const name of Object.keys(require('./package.json').dependencies)) { try { require.resolve(name); } catch { process.exit(1); } }"
+node -e "const fs = require('node:fs'); const crypto = require('node:crypto'); try { const hash = crypto.createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex'); if (fs.readFileSync('node_modules/.releaf-package-lock.sha256', 'utf8').trim() !== hash) process.exit(1); for (const name of Object.keys(require('./package.json').dependencies)) require.resolve(name); } catch { process.exit(1); }"
 if errorlevel 1 (
-    echo Installing project dependencies...
-    call npm.cmd ci
+    echo Installing current project dependencies...
+    call npm.cmd ci --no-audit --no-fund
+    if errorlevel 1 goto :failed
+    node -e "const fs = require('node:fs'); const hash = require('node:crypto').createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex'); fs.writeFileSync('node_modules/.releaf-package-lock.sha256', hash);"
     if errorlevel 1 goto :failed
 )
 

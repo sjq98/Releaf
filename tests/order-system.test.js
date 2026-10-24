@@ -94,6 +94,26 @@ test("delivery dates retain Singapore wall time and reject invalid calendar date
   }
 });
 
+test("message sent time accepts source instants or Malaysia wall time and validates edits", t => {
+  const { store, as, alice, create } = fixture(t);
+  for (const messageSentAt of ["2026-10-24T07:00:00Z", "2026-10-24T15:00", "2026-10-24T15:00:30+08:00"]) {
+    const order = create({ messageSentAt });
+    assert.equal(order.messageSentAt, "2026-10-24T15:00");
+    assert.equal(as(alice, () => store.getRecord(order.id)).values.messageSentAt, order.messageSentAt);
+  }
+  for (const messageSentAt of ["2026-02-30T12:00Z", "2026-10-24T24:00Z", "2026-10-24T15:00:60Z", "not a time", 1792825200]) {
+    assert.throws(() => create({ messageSentAt }), { status: 400 });
+  }
+  const order = create({ messageSentAt: "2026-10-24T07:00Z" });
+  const edited = as(alice, () => store.orders.update(order.id, {
+    version: order.version, messageSentAt: "2026-10-24T08:30Z",
+  }));
+  assert.equal(edited.messageSentAt, "2026-10-24T16:30");
+  assert.equal(edited.reviewed, false);
+  const cleared = as(alice, () => store.orders.update(order.id, { version: edited.version, messageSentAt: null }));
+  assert.equal(cleared.messageSentAt, null);
+});
+
 test("members see only owned records through dedicated and generic forms, references and activity", t => {
   const { store, as, admin, alice, bob, create } = fixture(t);
   const mine = create(), other = create({ customerName: "Bob customer" }, bob);
@@ -287,6 +307,31 @@ test("AI intake automatically creates unreviewed shared records without extracti
   assert.equal(as(alice, () => store.listRecords(store.orders.tables().payments)).length, 1);
 });
 
+test("WhatsApp metadata overrides extracted customer and time while retaining manual-import names", t => {
+  const { store, as, alice } = fixture(t);
+  const draft = { isOrder: true, customerName: "AI guess", messageSentAt: "2026-01-01T01:00", fulfillment: "pickup" };
+  const variants = [
+    [{ chatName: "  WhatsApp Customer  ", sender: "sender@c.us", timestamp: "2026-10-24T07:00:30Z" }, "WhatsApp Customer", "2026-10-24T15:00"],
+    [{ chatName: " ", sender: "sender@c.us" }, "sender@c.us", null],
+    [{ chatName: null, sender: null }, "customer-chat", null],
+  ];
+  for (const [index, [metadata, customerName, messageSentAt]] of variants.entries()) {
+    const order = as(alice, () => store.orders.importExtracted({
+      draft, source: source({ messageId: `metadata-${index}`, ...metadata }), text: message,
+    }));
+    assert.equal(order.customerName, customerName);
+    assert.equal(order.messageSentAt, messageSentAt);
+    assert.equal(order.totalAmount, null);
+    assert.equal(order.reviewed, false);
+    const record = as(alice, () => store.getRecord(order.id));
+    assert.equal(record.values.customerName, customerName);
+    assert.equal(record.values.messageSentAt, messageSentAt);
+  }
+  const manual = as(alice, () => store.orders.importExtracted({ draft: { isOrder: true, customerName: "Manual customer" }, text: message }));
+  assert.equal(manual.customerName, "Manual customer");
+  assert.equal(manual.messageSentAt, null);
+});
+
 test("source identity deduplicates before AI and concurrent source replay creates one order and one confirmation", async t => {
   const { store, as, alice, bob } = fixture(t);
   let calls = 0;
@@ -360,6 +405,24 @@ test("Agent review/full access and stale previews share the real form and confir
   assert.equal(as(alice, () => operations.run("create_order", body(), actor, "full")).status, "applied");
 });
 
+test("Agent order edits expose message time through the same review and ownership rules", t => {
+  const { store, as, alice, bob, create } = fixture(t);
+  const order = create({ messageSentAt: "2026-10-24T07:00Z" });
+  const operations = createAgentOperations(store);
+  const actor = { type: "chat", id: store.agent.createSession(alice.id).id, name: "Assistant", userId: alice.id };
+  const pending = as(alice, () => operations.run("update_order", {
+    orderId: order.id, version: order.version, messageSentAt: "2026-10-24T08:00Z",
+  }, actor, "message-time"));
+  assert.equal(pending.status, "pending");
+  assert.equal(as(alice, () => store.orders.get(order.id)).messageSentAt, "2026-10-24T15:00");
+  const applied = as(alice, () => operations.approve(pending.id));
+  assert.equal(applied.result.messageSentAt, "2026-10-24T16:00");
+  assert.equal(as(alice, () => store.getRecord(order.id)).values.messageSentAt, "2026-10-24T16:00");
+  assert.throws(() => as(bob, () => store.orders.update(order.id, {
+    version: applied.result.version, messageSentAt: null,
+  })), { status: 404 });
+});
+
 test("long order text and notes remain in shared fields without truncation", t => {
   const { store, as, alice, create } = fixture(t);
   const sourceText = "S".repeat(40000), notes = "N".repeat(10000);
@@ -368,6 +431,58 @@ test("long order text and notes remain in shared fields without truncation", t =
   assert.equal(record.values.sourceText, sourceText);
   assert.equal(record.values.notes, notes);
   assert.throws(() => create({ sourceText: `${sourceText}x` }), { status: 400 });
+});
+
+test("message-time migration preserves custom schemas and customer edits and is idempotent", t => {
+  const { store, as, admin, alice, create } = fixture(t);
+  const orders = [
+    create({ customerName: "Human edited customer" }),
+    create({ messageSentAt: "2026-10-24T18:00" }),
+    create(),
+    create(),
+    create(),
+  ];
+  const metadata = [
+    source({ timestamp: "2026-10-24T07:00Z" }),
+    source({ timestamp: "2026-10-24T07:00Z" }),
+    source(),
+    source({ timestamp: "2026-02-30T12:00Z" }),
+    { channel: "manual", timestamp: "2026-10-24T07:00Z" },
+  ];
+  orders.forEach((order, index) => store.database.prepare("UPDATE order_details SET source_json = ? WHERE order_id = ?")
+    .run(JSON.stringify(metadata[index]), order.id));
+  let form = store.getForm(store.orders.tables().orders);
+  form = as(admin, () => store.updateForm(form.id, {
+    version: form.version, name: "My orders", fields: [
+      ...form.fields, { id: "customNote", name: "My note", type: "text", required: false, unique: false },
+    ],
+  }));
+  const oldFields = form.fields.filter(field => field.id !== "messageSentAt");
+  store.database.prepare("UPDATE forms SET fields_json = ? WHERE id = ?").run(JSON.stringify(oldFields), form.id);
+  const before = store.orders.fingerprint();
+  store.orders.migrate();
+  const migratedForm = store.getForm(form.id);
+  assert.equal(migratedForm.id, form.id);
+  assert.equal(migratedForm.name, "My orders");
+  assert.equal(migratedForm.version, form.version + 1);
+  assert.deepEqual(migratedForm.fields.filter(field => field.id !== "messageSentAt"), oldFields);
+  assert.equal(migratedForm.fields.find(field => field.id === "messageSentAt").type, "datetime");
+  const first = as(alice, () => store.orders.get(orders[0].id));
+  assert.equal(first.customerName, "Human edited customer");
+  assert.equal(first.messageSentAt, "2026-10-24T15:00");
+  assert.equal(first.version, orders[0].version + 1);
+  assert.equal(as(alice, () => store.orders.get(orders[1].id)).messageSentAt, "2026-10-24T18:00");
+  for (const order of orders.slice(2)) {
+    assert.equal(as(alice, () => store.orders.get(order.id)).messageSentAt, null);
+    assert.equal(as(alice, () => store.orders.get(order.id)).version, order.version);
+  }
+  const after = store.orders.fingerprint();
+  assert.deepEqual(after.forms, before.forms);
+  assert.deepEqual(after.details, before.details);
+  assert.deepEqual(after.sources, before.sources);
+  store.orders.migrate();
+  assert.deepEqual(store.orders.fingerprint(), after);
+  assert.equal(store.getForm(form.id).version, migratedForm.version);
 });
 
 test("legacy migration preserves IDs, ownership, amounts, notes, ledger archive and invoice history without confirming payment", t => {

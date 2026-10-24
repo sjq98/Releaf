@@ -1,5 +1,10 @@
 node_modules/
 data/
+backups/
+uploads/
+attachments/
+.wwebjs_auth/
+.wwebjs_cache/
 output/
 .playwright-cli/
 tmp/

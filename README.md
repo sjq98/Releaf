@@ -47,7 +47,7 @@ The sustainability hypothesis is that reliable stock visibility could reduce avo
 - Fixed warehouse stock, linked inbound/outbound documents and two approval workflows.
 - Inventory analysis dashboard with monthly receipt/issue curves, live stock alerts, monthly balance/turnover reports and matching read-only Agent queries.
 - Independent order Space with real Orders, Payment confirmations and Invoices forms, pending AI intake, manual amount review, paid-in-full confirmation and pickup/delivery workflows. See [orders](docs/orders.md).
-- Optional administrator-only WhatsApp read bridge: explicitly selected chat, bounded message preview, source deduplication and review-first Agent imports. No message sending or automatic receipt/invoice confirmation. See [bridge setup](docs/whatsapp-bridge.md).
+- Optional administrator-only WhatsApp read bridge: explicitly selected chat, fresh bounded message scans and review-first Agent imports. Each new preview can import the same messages again; retries of an applied plan return the original result. No message sending or automatic receipt/invoice confirmation. See [bridge setup](docs/whatsapp-bridge.md).
 - A separate Meeting Tasks Space: paste or import a UTF-8 TXT/Markdown summary and extract actionable commitments directly into the Tasks table, with source quotes, meeting history and duplicate protection. See [meeting tasks](docs/meeting-tasks.md).
 - Local accounts with administrator/member roles, authenticated approval identities and owner-bound Agent tokens.
 - Separate product catalog, protected warehouse writes, spreadsheet batch matching and assistant file uploads.
@@ -74,7 +74,7 @@ This is an independent prototype, not yet integrated with Orbyte APIs or Orbyte 
 
 Requires Node.js **22.13.0 or later** and npm. No Python, GPU, or external database is needed for the local application.
 
-On Windows, double-click `start-server.bat` or run `.\start-server.bat` in PowerShell. It switches to the project directory, installs missing dependencies, and starts the server. Keep its window open while using the app; press Ctrl+C to stop it. Startup errors stay visible.
+On Windows, double-click `start-server.bat` or run `.\start-server.bat` in PowerShell. It switches to the project directory, installs locked dependencies on first use or when `package-lock.json` changes, and starts the server. Keep its window open while using the app; press Ctrl+C to stop it. Startup errors stay visible.
 
 ```powershell
 git clone https://github.com/sjq98/Releaf.git
@@ -85,7 +85,7 @@ npm.cmd start
 
 Open **http://127.0.0.1:5174**. In a POSIX shell, use `npm` instead of `npm.cmd`.
 
-The first launch creates `data/forms.sqlite` and a generic **New form**. On the sign-in screen, create the first administrator with a username, display name and password of at least **12 characters**. There is no default password. Subsequent visits require sign-in. An administrator can add accounts, change roles, disable accounts and reset passwords under **Account > Manage users**; all users can change their own password or sign out. Sessions expire after seven days, and password/role/active-status changes invalidate that user's existing sessions.
+The first launch creates `data/forms.sqlite` and a generic **New form**, with no accounts or business records. On the sign-in screen, create the first administrator with a username, display name and password of at least **12 characters**. There is no default password or bundled local account. After this setup, anyone using the local workspace can choose **Create account** to register and sign in as a **Member**, without administrator approval; self-registration cannot grant administrator privileges. Subsequent visits require sign-in. An administrator can add accounts, change roles, disable accounts and reset passwords under **Account > Manage users**; all users can change their own password or sign out. Sessions expire after seven days, and password/role/active-status changes invalidate that user's existing sessions.
 
 Administrators manage forms, fields, records, product/warehouse catalogs, stock settings, navigation, AI settings and users. Members read tables and the dashboard and use warehouse request workflows, including approval when assigned; they cannot edit table schemas, maintain catalog records or use generic record CRUD. Use **Warehouse workflows > Set up warehouse** as an administrator to install the warehouse system in a Space. Local data and credentials are excluded from Git. Deleting the last form does not regenerate a template. See [account and workflow details](docs/user-guide.md).
 

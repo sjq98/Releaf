@@ -129,12 +129,13 @@ The optional [local bridge](whatsapp-bridge.md) exposes administrator-only
 order screen, not inside the assistant. A token must belong to
 `order-management`; chat calls also enforce that Space.
 
-Choose one exact chat ID and a read bound (1-50 messages, 1-168 hours). Preview
-classifies inbound text and returns an owner-scoped 30-minute `planId` and
+Choose one exact chat ID and a read bound (1-50 messages, 1-168 hours). Each preview
+rescans inbound text regardless of earlier imports or deleted orders and returns an owner-scoped 30-minute `planId` and
 `fingerprint`; it creates no orders. Import uses those exact values and a new
 idempotency key. Review mode stages the complete import for approval; Full
-access commits it through the same workflow. Replayed message source IDs
-cannot create duplicate orders. Every saved order still needs human review
+access commits it through the same workflow. A new preview can import the same
+messages as new orders; retrying the same applied plan returns its original
+result without creating more orders. Every saved order still needs human review
 and a manually entered amount, and its paid-in-full checkbox starts unchecked.
 
 These tools do not read all chats automatically, process media, send messages,
@@ -220,6 +221,10 @@ Errors use `{ "error": "...", "fields": {} }`. Common codes: 400 invalid argumen
 First-run `POST /api/auth/setup` creates the first administrator, with no default
 password and a minimum of 12 characters. `POST /api/auth/login` issues a seven-day
 HttpOnly, SameSite=Strict session; `POST /api/auth/logout` ends it.
+After initial setup, public local `POST /api/auth/register` accepts `username`,
+`displayName` and `password`, creates an active Member and issues the same session
+cookie (201). Roles and active status cannot be chosen by registration. Registration
+is limited to ten attempts per client in fifteen minutes, independently of login.
 `GET /api/auth/status` reports setup/sign-in state. Signed-in users can change their
 own password with `POST /api/auth/password` and read active approvers through
 `GET /api/auth/assignees`. Administrators use `GET/POST /api/auth/users` and

@@ -15,7 +15,7 @@ reference, query, history, validation and Agent APIs as other business forms.
 
 | Form | Core fields and relationship |
 | --- | --- |
-| Orders | Unique order number, status, customer/phone, department, salesperson, fulfillment, delivery address, requested/estimated/actual delivery time, nullable amount, reviewed, payment confirmed, notes, customer message, attachments, owner |
+| Orders | Unique order number, status, customer/phone, message sent at, department, salesperson, fulfillment, delivery address, requested/estimated/actual delivery time, nullable amount, reviewed, payment confirmed, notes, customer message, attachments, owner |
 | Payment confirmations | Unique confirmation number, unique required reference to Orders.number, mirrored order amount, method, paid-in-full checkbox, confirmer/time, notes, owner |
 | Invoices | Invoice number, required reference to Orders.number, amount, notes, operator, owner |
 
@@ -28,6 +28,12 @@ per order. Invoice numbers must not repeat within an order.
 1. Paste a customer message or use the optional selected-chat
    [WhatsApp bridge](whatsapp-bridge.md). AI identifies order details and saves a
    **pending-review** record, with a linked unchecked payment confirmation.
+   WhatsApp imports fill Customer from the conversation's contact/display name
+   (falling back to sender ID, then chat ID), overriding AI-extracted names.
+   Message sent at comes from the message timestamp in Malaysia time (UTC+08:00),
+   to minute precision, independently of the order's creation date.
+   Manual pasted messages keep the extracted customer and leave this time blank
+   unless entered by the operator.
 2. A person verifies customer details, notes and fulfillment, manually enters the
    MYR order amount, and checks the order-review box. Amounts remain null until
    explicitly entered; even a price quoted in the source is never auto-filled.
@@ -97,8 +103,12 @@ confirmPayment(id, body)          {version, confirmed: true|false}
 invoice(id, body)                 {version, number, amount, note?}
 notification(id, body)            local message text; no delivery
 extract({spaceId, text})          read-only classification/extraction, <=40,000 chars
-importExtracted({draft,text,source?})  save unreviewed/null-amount order
+importExtracted({draft,text,source?}, {deduplicateSource?})  save unreviewed/null-amount order
 ```
+
+The internal `deduplicateSource` option defaults to true for ordinary intake.
+The WhatsApp bridge passes false: every new preview can import messages again,
+while replaying an applied preview plan still returns its original result.
 
 Signed-in local routes: `/api/orders/workspace`, `/api/orders/extract`,
 `/api/orders/intake`, `/api/orders`, `/api/orders/:id` and POST actions under
@@ -120,3 +130,6 @@ Order-number collisions receive a new number with the previous number retained
 in history. Historical product lines become notes; stock is never changed.
 Old payment entries are retained as archived history, but **never** interpreted
 as confirmation that an order is fully paid. Migration is idempotent.
+Existing Orders schemas gain the optional Message sent at field without changing
+other fields or their IDs. Existing WhatsApp orders with valid stored source
+timestamps have missing message times filled; existing customer edits are kept.

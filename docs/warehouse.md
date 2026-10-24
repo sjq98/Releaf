@@ -69,6 +69,14 @@ The tables support search, applicable warehouse filters, state tabs and referenc
 
 An individual request's **Import product lines** accepts XLSX or UTF-8 CSV. The first row contains headers. Product code (preferred) or an unambiguous product name and positive quantity are required; unit and notes are optional. Preview and explicitly replace the request's lines. The request is not submitted automatically.
 
+**Column matching** reads the actual inbound/outbound schemas. The fixed labels are target form fields; each dropdown lists the uploaded worksheet's original headers, with **Not mapped** to skip a column. It shows every detail field, request header field and custom field, grouped into **Detail fields**, **Request fields**, and supplementary **Product and warehouse matching**. Business field names remain unchanged when switching UI language.
+
+Standard Chinese/English header aliases match automatically, for example `单位` to `Unit`, `入库数量` to `Inbound Quantity`, `申请日期` to `Application Date`, and `审批人` to `Approver`. Custom fields match their configured names; arbitrary translations of custom names need manual matching. Duplicate/ambiguous headers require a manual selection.
+
+Preview includes request fields to apply. Confirming **Replace product lines** also fills mapped editable header fields, such as approver, application date, type, warehouse and request notes. All nonblank values for a header field must agree across the rows of an individual request. A mapped warehouse can replace the request's current selection after preview. Plain `备注` / `Notes` belongs to each detail; use `单据备注`, `申请备注`, `Request Notes` or `Document Notes` for the header, or map it manually.
+
+System-maintained fields remain visible but cannot be imported directly: status, totals, posting/workflow timestamps, formulas and the generated request number. Applicant remains the signed-in account; a different spreadsheet applicant is ignored with a warning. The spreadsheet approver is imported as text; final submission, approval and rejection still use the normal workflow permissions and assigned-approver checks. The detail's request link accepts an external request number only for grouping; the workflow generates its own number and links the lines automatically. Attachments are uploaded separately in the request.
+
 There is no standalone bulk-import button on the workflow overview; Excel import is inside the inbound/outbound application. The programmatic batch API and Agent tools remain available. They also match warehouse, direction, approver, application date and external request number, while binding the applicant to the authenticated account. Rows are grouped by direction, warehouse, header values and external request number; repeated products within one group are summed exactly. For example, when signed in as `alice` and `sam` is an active account:
 
 ```csv

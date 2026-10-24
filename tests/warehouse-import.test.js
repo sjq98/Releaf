@@ -110,6 +110,98 @@ test("line import exposes every detail field and request headers with bilingual 
   assert.equal(plan.mappingFields.find(item => item.key === "applicant").managed, true);
 });
 
+test("outbound matching exposes its complete schema and uses actual spreadsheet headers", async t => {
+  const { imports, upload, tables, store } = setup(t);
+  const file = await upload("Product Code,Outbound Quantity,Unit,Line Notes,Approver,Outbound Request Number,Request Notes,Application Date,Outbound Type\nP1,3,kg,Handle carefully,Manager,EXT-OUT-01,Customer collection,2026-10-24,Sales issue");
+  const plan = imports.match({ fileId: file.id, kind: "outbound", linesOnly: true });
+  assert.deepEqual(plan.errors, []);
+  for (const [role, section] of [["outboundLines", "lines"], ["outbound", "request"]]) {
+    const actual = plan.mappingFields.filter(item => item.section === section);
+    assert.deepEqual(actual.map(item => item.fieldId), store.getForm(tables[role]).fields.map(field => field.id));
+    assert.ok(actual.every(item => item.formId === tables[role]));
+  }
+  assert.equal(plan.headers[plan.mapping.quantity], "Outbound Quantity");
+  assert.equal(plan.headers[plan.mapping.unit], "Unit");
+  assert.equal(plan.headers[plan.mapping.group], "Outbound Request Number");
+  assert.equal(plan.requestValues.type, "Sales issue");
+  assert.equal(plan.requestValues.notes, "Customer collection");
+  assert.equal(plan.documents[0].lines[0].notes, "Handle carefully");
+});
+
+test("authenticated imports preserve the applicant and accept spreadsheet approvers as text", async t => {
+  const { store, imports, upload, values } = setup(t);
+  const { user } = store.auth.setup({ username: "importer", displayName: "Importer", password: "Test-importer-password-2026" });
+  const manager = store.auth.withUser(user, () => store.auth.createUser({ username: "manager", displayName: "Receiving Manager", password: "Test-manager-password-2026", role: "user" }));
+  const file = await upload("SKU,Quantity,Applicant,Approver\nP1,2,someone.else,Receiving Manager");
+  const match = mapping => store.auth.withUser(user, () => imports.match({ fileId: file.id, kind: "inbound", linesOnly: true, values, ...(mapping ? { mapping } : {}) }));
+  const plan = match();
+  assert.deepEqual(plan.errors, []);
+  assert.equal(plan.documents[0].values.applicant, user.username);
+  assert.equal(plan.requestValues.approver, "Receiving Manager");
+  assert.equal(Object.hasOwn(plan.requestValues, "applicant"), false);
+  assert.ok(plan.warnings.some(item => item.message?.includes("signed-in account")));
+  for (const key of ["request_number", "request_status", "line_status"]) {
+    assert.throws(() => match({ [key]: 2 }), /managed stock and status/);
+  }
+  store.auth.withUser(user, () => store.auth.updateUser(manager.id, { active: false }));
+  assert.deepEqual(match().errors, []);
+  assert.equal(match().requestValues.approver, "Receiving Manager");
+  const unregistered = await upload("SKU,Quantity,Approver\nP1,2,Warehouse supervisor\nP1,3,Warehouse supervisor\nP1,4,Warehouse supervisor");
+  const imported = store.auth.withUser(user, () => imports.match({ fileId: unregistered.id, kind: "inbound", linesOnly: true, values }));
+  assert.deepEqual(imported.errors, []);
+  assert.equal(imported.requestValues.approver, "Warehouse supervisor");
+  assert.equal(imported.documents[0].lines[0].quantity, 9);
+});
+
+test("custom numeric and reference columns survive matching and saving a request", async t => {
+  const { store, wh, imports, upload, tables, values, warehouse } = setup(t);
+  const { user } = store.auth.setup({ username: "custom.admin", password: "Test-custom-password-2026" });
+  store.auth.withUser(user, () => {
+    for (const [role, extra] of [
+      ["inboundLines", [
+        { id: "weight", name: "Weight", type: "number", required: false, unique: false },
+        { id: "location", name: "Storage Location", type: "reference", required: false, unique: false, reference: { formId: tables.warehouses, fieldId: "code" } },
+      ]],
+      ["inbound", [{ id: "referenceWarehouse", name: "Reference Warehouse", type: "reference", required: false, unique: false, reference: { formId: tables.warehouses, fieldId: "code" } }]],
+    ]) {
+      const form = store.getForm(tables[role]);
+      store.updateForm(form.id, { ...form, fields: [...form.fields, ...extra] });
+    }
+    const form = store.getForm(tables.inbound);
+    store.updateForm(form.id, { ...form, fields: form.fields.map(field => field.id === "notes" ? { ...field, name: "Delivery Memo" } : field) });
+  });
+  const file = await upload("SKU,Quantity,Weight,Storage Location,Reference Warehouse,Delivery Memo\nP1,2,1.25,WH001,WH001,Dock 3");
+  const plan = store.auth.withUser(user, () => imports.match({ fileId: file.id, kind: "inbound", linesOnly: true, values }));
+  assert.deepEqual(plan.errors, []);
+  assert.equal(plan.documents[0].lines[0].weight, 1.25);
+  assert.equal(plan.documents[0].lines[0].location, warehouse.id);
+  assert.equal(plan.requestValues.referenceWarehouse, warehouse.id);
+  assert.equal(plan.requestValues.notes, "Dock 3");
+  assert.deepEqual(plan.mappingFields.find(field => field.key === "line_location").reference, { formId: tables.warehouses, fieldId: "code" });
+  const result = store.auth.withUser(user, () => wh.createDocument({ kind: "inbound", values: { ...values, ...plan.requestValues, approver: user.username }, lines: plan.documents[0].lines }));
+  assert.equal(result.lines[0].values.weight, 1.25);
+  assert.equal(result.lines[0].values.location, warehouse.id);
+  assert.equal(result.record.values.notes, "Dock 3");
+  assert.equal(result.record.values.referenceWarehouse, warehouse.id);
+});
+
+test("one request imports a consistent warehouse and refuses conflicting header values", async t => {
+  const { wh, imports, upload, values, warehouse } = setup(t);
+  const selected = wh.catalog({ role: "warehouses", values: { code: "W2", name: "Selected warehouse" } });
+  const file = await upload("SKU,Quantity,Warehouse code,Request Notes\nP1,2,WH001,Dock 1\nP1,3,WH001,Dock 1");
+  const plan = imports.match({ fileId: file.id, kind: "inbound", linesOnly: true, values: { ...values, warehouse: selected.id } });
+  assert.deepEqual(plan.errors, []);
+  assert.equal(plan.requestValues.warehouse, warehouse.id);
+  assert.equal(plan.documents[0].lines[0].quantity, 5);
+  const conflicting = await upload("SKU,Quantity,Warehouse code,Request Notes\nP1,2,WH001,Dock 1\nP1,3,W2,Dock 1");
+  assert.match(imports.match({ fileId: conflicting.id, kind: "inbound", linesOnly: true }).errors[0].message, /same value/);
+  const notes = await upload("SKU,Quantity,Request Notes\nP1,2,Dock 1\nP1,3,Dock 2");
+  assert.match(imports.match({ fileId: notes.id, kind: "inbound", linesOnly: true }).errors[0].message, /same value/);
+  const requests = await upload("SKU,Quantity,Request number\nP1,2,R1\nP1,3,R2");
+  assert.match(imports.match({ fileId: requests.id, kind: "inbound", linesOnly: true }).errors[0].message, /one request at a time/);
+  assert.match(imports.match({ fileId: file.id, kind: "inbound", values: { ...values, warehouse: selected.id } }).errors[0].message, /differs from the selected warehouse/);
+});
+
 test("batch preview is unwritten; submit creates approval requests and equivalent mappings cannot duplicate them", async t => {
   const { store, imports, upload, args, tables, wh } = setup(t);
   const file = await upload("SKU,Quantity\nP1,4");

@@ -11,7 +11,7 @@ const sourceKey = source => JSON.stringify([source.accountId, source.chatId, sou
 
 function fixture(t, { messages, extract, clock = () => fixedNow, fetchError } = {}) {
   const db = new DatabaseSync(":memory:");
-  db.exec("CREATE TABLE imported_orders (id TEXT PRIMARY KEY, source_key TEXT UNIQUE, data TEXT)");
+  db.exec("CREATE TABLE imported_orders (id TEXT PRIMARY KEY, source_key TEXT, data TEXT)");
   let user = admin, extractionCalls = 0, failMessage = null;
   const requests = [], spawns = [];
   const store = {
@@ -27,7 +27,7 @@ function fixture(t, { messages, extract, clock = () => fixedNow, fetchError } = 
     },
     orders: {
       findSource(source) {
-        const row = db.prepare("SELECT data FROM imported_orders WHERE source_key = ?").get(sourceKey(source));
+        const row = db.prepare("SELECT data FROM imported_orders WHERE source_key = ? ORDER BY rowid DESC LIMIT 1").get(sourceKey(source));
         return row ? JSON.parse(row.data) : null;
       },
       async extract(input) {
@@ -37,11 +37,12 @@ function fixture(t, { messages, extract, clock = () => fixedNow, fetchError } = 
           totalAmount: 999, reviewed: true, issues: [],
         };
       },
-      importExtracted({ draft, source }) {
+      importExtracted({ draft, source }, { deduplicateSource = true } = {}) {
         if (source.messageId === failMessage) throw new AppError(400, "Import failed.");
-        const previous = this.findSource(source);
+        const previous = deduplicateSource ? this.findSource(source) : null;
         if (previous) return { ...previous, intakeDuplicate: true };
-        const order = { id: `order-${source.messageId}`, ...draft, source };
+        const count = db.prepare("SELECT COUNT(*) AS n FROM imported_orders").get().n;
+        const order = { id: `order-${source.messageId}-${count + 1}`, ...draft, source };
         db.prepare("INSERT INTO imported_orders VALUES (?, ?, ?)").run(order.id, sourceKey(source), JSON.stringify(order));
         return order;
       },
@@ -106,7 +107,7 @@ test("preview reads only the selected chat and filters payments, outbound and me
   assert.equal(query.searchParams.get("limit"), "10");
 });
 
-test("plan execution and retries create one unreviewed order per stable message ID", async t => {
+test("each preview rescans messages while retries of one plan return the original orders", async t => {
   const f = fixture(t);
   f.configure();
   const plan = await f.bridge.previewImport({ chatId: "customer@c.us" });
@@ -118,10 +119,40 @@ test("plan execution and retries create one unreviewed order per stable message 
   assert.equal(replay.replayed, true);
   assert.equal(replay.orders[0].id, result.orders[0].id);
   assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM imported_orders").get().n, 1);
-  const duplicate = await f.bridge.previewImport({ chatId: "customer@c.us" });
-  assert.equal(duplicate.duplicates, 1);
-  assert.equal(duplicate.candidates.length, 0);
-  assert.equal(f.extractionCalls(), 1);
+  const rescan = await f.bridge.previewImport({ chatId: "customer@c.us" });
+  assert.equal(rescan.duplicates, 0);
+  assert.equal(rescan.candidates.length, 1);
+  assert.equal(f.extractionCalls(), 2);
+  const reimported = f.bridge.importMessages(rescan);
+  assert.equal(reimported.imported, 1);
+  assert.notEqual(reimported.orders[0].id, result.orders[0].id);
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM imported_orders").get().n, 2);
+});
+
+test("WhatsApp preview and import never resolve historical source orders", async t => {
+  const f = fixture(t);
+  f.configure();
+  f.store.orders.findSource = () => { throw new AppError(404, "Order record not found."); };
+  const plan = await f.bridge.previewImport({ chatId: "customer@c.us", hours: 24 });
+  assert.equal(plan.candidates.length, 1);
+  assert.equal(f.bridge.importMessages(plan).imported, 1);
+});
+
+test("preview and import use WhatsApp customer and sent time instead of AI guesses", async t => {
+  const f = fixture(t, { extract: async () => ({
+    isOrder: true, customerName: "Untrusted name in message", messageSentAt: "2026-01-01T01:00",
+    fulfillment: "pickup", totalAmount: 999, reviewed: true,
+  }) });
+  f.configure();
+  f.response.chat.name = "WhatsApp username";
+  const plan = await f.bridge.previewImport({ chatId: "customer@c.us" });
+  const candidate = plan.candidates[0];
+  assert.equal(candidate.draft.customerName, "WhatsApp username");
+  assert.equal(candidate.draft.messageSentAt, "2026-10-24T15:00");
+  assert.equal(candidate.source.timestamp, "2026-10-24T07:00:00Z");
+  const order = f.bridge.importMessages(plan).orders[0];
+  assert.equal(order.customerName, candidate.draft.customerName);
+  assert.equal(order.messageSentAt, candidate.draft.messageSentAt);
 });
 
 test("import participates in the same rollback preview as other Agent mutations", async t => {

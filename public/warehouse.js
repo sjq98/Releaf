@@ -272,7 +272,11 @@ export function initWarehouse({ api, icons, toast, getState, refresh, navigate, 
       if (control.hasAttribute("data-wh-continue")) { const id = editor.doc.record.id; dialog.close(); showView("warehouse-flows"); await open(null, id); }
       if (control.hasAttribute("data-wh-import-lines")) {
         capture();
-        importer.open({ kind: editor.kind, values: { warehouse: editor.values.warehouse }, onLines: lines => {
+        const active = editor;
+        importer.open({ kind: editor.kind, values: structuredClone(editor.values), onLines: (lines, requestValues) => {
+          if (session !== sessionVersion || editor !== active) return;
+          const editable = new Set(editableFields(formFor(editor.kind)).filter(field => field.id !== "applicant" && !field.formula).map(field => field.id));
+          Object.assign(editor.values, Object.fromEntries(Object.entries(requestValues ?? {}).filter(([key]) => editable.has(key))));
           editor.lines = lines.map(values => { const previous = editor.lines.find(line => line.values.product === values.product); return { ...(previous?.id ? { id: previous.id, version: previous.version } : {}), values }; });
           renderDocument();
         } });

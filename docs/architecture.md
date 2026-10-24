@@ -38,6 +38,9 @@ Browser business API requests require a seven-day HttpOnly, SameSite=Strict sess
 session tokens are hashed in SQLite. Role, password and active-status changes invalidate
 the user's sessions. Administrators manage accounts, and the last active administrator
 cannot be disabled or demoted. Users can change their own password or sign out.
+After initial setup, public local self-registration creates only active Member
+accounts and issues a session. Registration cannot select roles or alter existing
+accounts, and is limited to ten attempts per client in fifteen minutes.
 
 Administrators manage forms, generic records, navigation, provider/task/rule settings
 and users, product/warehouse catalogs and stock settings. Members read shared data and

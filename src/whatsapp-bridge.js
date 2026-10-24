@@ -4,6 +4,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AppError } from "./errors.js";
+import { whatsappOrderFields } from "./order-system.js";
 
 export const WHATSAPP_PROTOCOL = "releaf-whatsapp-v1";
 export const WHATSAPP_SOURCE_REVISION = "a104fa2054fc4ce0b228fc3c68052e73e721afbf";
@@ -189,7 +190,7 @@ export function createWhatsAppBridge({
         !Array.isArray(response.messages) || response.messages.length > options.limit) {
       fail(502, "The WhatsApp helper returned an invalid conversation.");
     }
-    const candidates = [], skipped = [], duplicateIds = new Set(), seen = new Set();
+    const candidates = [], skipped = [], seen = new Set();
     for (const message of response.messages) {
       const id = message?.id;
       if (typeof id !== "string" || !id || id.length > 500) fail(502, "A WhatsApp message is missing its stable source ID.");
@@ -206,18 +207,17 @@ export function createWhatsAppBridge({
         sender: typeof message.sender === "string" ? message.sender.slice(0, 200) : null,
         timestamp: typeof message.timestamp === "string" ? message.timestamp : null,
       };
-      if (store.orders.findSource(source)) { duplicateIds.add(id); continue; }
       const draft = await store.orders.extract({ text: message.body });
       if (draft.isOrder !== true) { skipped.push({ messageId: id, reason: "not_an_order" }); continue; }
       candidates.push({
         source, text: message.body,
-        draft: { ...draft, totalAmount: null, reviewed: false },
+        draft: { ...draft, ...whatsappOrderFields(source), totalAmount: null, reviewed: false },
       });
     }
     const payload = {
       chat: { id: response.chat.id, name: String(response.chat.name ?? "").slice(0, 200) },
-      candidates, duplicates: duplicateIds.size, skipped,
-      counts: { scanned: seen.size, candidates: candidates.length, duplicates: duplicateIds.size, skipped: skipped.length },
+      candidates, duplicates: 0, skipped,
+      counts: { scanned: seen.size, candidates: candidates.length, duplicates: 0, skipped: skipped.length },
       truncated: response.truncated === true,
     };
     const planId = randomUUID(), createdAt = timestamp(), expiresAt = new Date(now() + PLAN_TTL).toISOString();
@@ -250,16 +250,14 @@ export function createWhatsAppBridge({
     return store.transaction(() => {
       const payload = JSON.parse(row.payload_json);
       const orders = [], skipped = [...payload.skipped];
-      let duplicates = payload.duplicates;
       for (const candidate of payload.candidates) {
         const order = store.orders.importExtracted({
           draft: candidate.draft, source: candidate.source, text: candidate.text,
-        });
+        }, { deduplicateSource: false });
         if (order.skipped) skipped.push({ messageId: candidate.source.messageId, reason: order.reason });
-        else if (order.intakeDuplicate) duplicates++;
         else orders.push(order);
       }
-      const result = { orders, imported: orders.length, duplicates, skipped, replayed: false };
+      const result = { orders, imported: orders.length, duplicates: 0, skipped, replayed: false };
       db.prepare("UPDATE whatsapp_import_plans SET result_json = ? WHERE id = ?").run(JSON.stringify(result), row.id);
       return result;
     });

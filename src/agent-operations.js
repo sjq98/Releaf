@@ -22,7 +22,7 @@ const nullableOrderText = { type: ["string", "null"] };
 const orderFields = {
   customerName: string, customerPhone: nullableOrderText, department: nullableOrderText, salesperson: nullableOrderText,
   fulfillment: { type: ["string", "null"], enum: ["pickup", "delivery", null] }, deliveryAddress: nullableOrderText,
-  estimatedDeliveryAt: nullableOrderText, requestedTime: nullableOrderText, notes: { ...nullableOrderText, maxLength: 10000 },
+  estimatedDeliveryAt: nullableOrderText, messageSentAt: nullableOrderText, requestedTime: nullableOrderText, notes: { ...nullableOrderText, maxLength: 10000 },
   sourceText: { ...nullableOrderText, maxLength: 40000 }, attachments: { type: "array", maxItems: 10, items: string },
   totalAmount: { type: ["number", "null"], minimum: 0, maximum: 1e12 },
   reviewed: { type: "boolean" },
@@ -37,7 +37,7 @@ const definitions = [
   ["parse_customer_order", "Classify and extract a read-only draft from customer text. Keep products and quantities in notes. Never fill totalAmount, even when a source mentions a price. Report missing details; a person enters the amount and reviews the saved order. No inventory linkage.", object({
     spaceId: string, text: { type: "string", maxLength: 40000 },
   }, ["text"])],
-  ["create_order", "Save an order and its linked unpaid confirmation record. AI-captured orders must have reviewed=false and totalAmount=null; only use an amount or reviewed=true when explicitly supplied/confirmed by the operator. Products and quantities stay in notes. Creation is not acceptance, payment confirmation or stock movement.", object({
+  ["create_order", "Save an order and its linked unpaid confirmation record. AI-captured orders must have reviewed=false and totalAmount=null; only use an amount or reviewed=true when explicitly supplied/confirmed by the operator. messageSentAt is the source message time, never the import time; leave it null unless known. Products and quantities stay in notes. Creation is not acceptance, payment confirmation or stock movement.", object({
     spaceId: string, ...orderFields,
   })],
   ["update_order", "Edit a draft or accepted order with its current version. Omitted fields stay unchanged; null clears optional text. Products stay in notes, totalAmount is explicitly confirmed. Status, payments and invoices use dedicated actions.", object({
@@ -57,10 +57,10 @@ const definitions = [
   }, ["orderId", "version"])],
   ["get_whatsapp_status", "Read the optional local, read-only WhatsApp connection status. Administrator only. Does not connect, read chats or send messages.", object({ spaceId: string })],
   ["list_whatsapp_chats", "List exact personal chat IDs from the connected WhatsApp account when the administrator asks. No group chats or outbound messages.", object({ spaceId: string, limit: { type: "integer", minimum: 1, maximum: 100 } })],
-  ["preview_whatsapp_import", "Read a bounded, explicitly selected WhatsApp chat, classify incoming text and prepare unreviewed order candidates. No orders are saved. Never scan arbitrary chats; prices from messages are ignored. Returns an owner-scoped expiring plan and fingerprint.", object({
+  ["preview_whatsapp_import", "Read a bounded, explicitly selected WhatsApp chat afresh on every preview, classify incoming text and prepare unreviewed order candidates regardless of previously imported or deleted orders. Customer uses the WhatsApp conversation name and messageSentAt uses the message timestamp, not AI guesses. No orders are saved. Never scan arbitrary chats; prices from messages are ignored. Returns an owner-scoped expiring plan and fingerprint.", object({
     spaceId: string, chatId: string, hours: { type: "integer", minimum: 1, maximum: 168 }, limit: { type: "integer", minimum: 1, maximum: 50 },
   }, ["chatId"])],
-  ["import_whatsapp_orders", "Save the exact WhatsApp preview plan as unreviewed orders and linked unpaid confirmation records. Human review and manual amounts are still required. Does not accept orders, mark payments received, send messages or write invoices.", object({
+  ["import_whatsapp_orders", "Save the exact WhatsApp preview plan as new unreviewed orders and linked unpaid confirmation records, even if another preview imported the same messages. Retrying the same applied plan returns its original result. Human review and manual amounts are still required. Does not accept orders, mark payments received, send messages or write invoices.", object({
     spaceId: string, planId: string, fingerprint: string,
   }, ["planId", "fingerprint"])],
   ["upload_inventory_file", "Upload an XLSX or UTF-8 CSV with base64 file.data and file.name, up to 5 MB. Upload stores the source file only; it does not change business records or start workflows. Returns fileId as id, worksheets, headers and samples. Use match_inventory_file next.", object({ spaceId: string, file: values }, ["file"])],

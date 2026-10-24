@@ -117,11 +117,12 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
           try { user = auth.authenticate(request.headers.cookie); } catch (error) { if (error.status !== 401) throw error; }
           return send(200, { setupRequired: auth.status().setupRequired, user, permissions: auth.permissions(user) });
         }
-        if (method === "POST" && ["/api/auth/setup", "/api/auth/login"].includes(pathname)) {
+        if (method === "POST" && ["/api/auth/setup", "/api/auth/register", "/api/auth/login"].includes(pathname)) {
           const body = await readJson(request, 8 * 1024);
-          const result = pathname.endsWith("/setup") ? auth.setup(body) : auth.login(body, request.socket.remoteAddress);
+          const action = pathname.slice("/api/auth/".length);
+          const result = auth[action](body, request.socket.remoteAddress);
           response.setHeader("Set-Cookie", sessionCookie(result.sessionToken));
-          return send(pathname.endsWith("/setup") ? 201 : 200, { user: result.user, permissions: auth.permissions(result.user) });
+          return send(action === "login" ? 200 : 201, { user: result.user, permissions: auth.permissions(result.user) });
         }
         if (pathname === "/api/auth/logout" && method === "POST") {
           await readJson(request, 8 * 1024);

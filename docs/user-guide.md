@@ -19,6 +19,12 @@ and password of at least 12 characters. No default password is provided. Later v
 use **Sign in**. Usernames contain 3-32 letters, numbers, dots, underscores or hyphens,
 start with a letter or number, and are stored in lowercase.
 
+After the first administrator is created, choose **Create account** on the sign-in
+screen to register a Member account with your own username, display name and password.
+No administrator approval is needed. New registrations are always Members; only an
+administrator can change their role. The repository includes no local accounts,
+passwords, databases, uploads or business records.
+
 Use the account menu to **Change password** or **Sign out**. Administrators also have
 **Manage users** to add accounts, change display names and roles, disable accounts or
 reset passwords. The last active administrator cannot be disabled or demoted. Sessions

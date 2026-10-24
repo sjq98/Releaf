@@ -32,7 +32,7 @@ async function fixture(t, { assistantFetch = async () => answer("Done.") } = {})
       const isOrder = index >= 0;
       return answer(JSON.stringify({
         isOrder, orderEvidence: isOrder ? input : null,
-        customerName: isOrder ? "Lee" : null, customerPhone: null,
+        customerName: isOrder ? "AI name that differs from WhatsApp" : null, customerPhone: null,
         fulfillment: isOrder ? "pickup" : null, deliveryAddress: null,
         requestedTime: null, notes: null,
         items: isOrder ? [{
@@ -114,6 +114,10 @@ test("reviewed WhatsApp Agent imports save two linked orders only after approval
   const token = await f.tokenFor();
   const plan = await f.operate(token, "preview_whatsapp_import", { chatId, hours: 24, limit: 10 });
   assert.equal(plan.candidates.length, 2);
+  for (const candidate of plan.candidates) {
+    assert.equal(candidate.draft.customerName, "Lee");
+    assert.equal(candidate.draft.messageSentAt, "2026-10-24T15:00");
+  }
   assert.deepEqual(plan.skipped, [{ messageId: "message-3", reason: "not_an_order" }]);
   assert.deepEqual(await f.json("/api/orders"), []);
   const args = { planId: plan.planId, fingerprint: plan.fingerprint };
@@ -145,8 +149,15 @@ test("reviewed WhatsApp Agent imports save two linked orders only after approval
     assert.equal(order.paymentConfirmation.confirmed, false);
     assert.equal(order.source.channel, "whatsapp");
     assert.equal(order.source.chatId, chatId);
+    assert.equal(order.customerName, "Lee");
+    assert.equal(order.messageSentAt, "2026-10-24T15:00");
     assert.ok(orderTexts.includes(order.sourceText));
   }
+  const records = await f.json(`/api/forms/${ordersId}/records`);
+  assert.equal(records.length, 2);
+  assert.ok(records.every(record => record.values.customerName === "Lee" && record.values.messageSentAt === "2026-10-24T15:00"));
+  const agentOrders = await f.operate(token, "list_orders");
+  assert.ok(agentOrders.every(order => order.customerName === "Lee" && order.messageSentAt === "2026-10-24T15:00"));
   const payments = await f.json(`/api/forms/${paymentsId}/records`);
   assert.equal(payments.length, 2);
   assert.deepEqual(new Set(payments.map(record => record.values.order)), new Set(orders.map(order => order.id)));
@@ -161,10 +172,82 @@ test("reviewed WhatsApp Agent imports save two linked orders only after approval
   assert.equal(replayed.replayed, true);
   assert.equal(replayed.imported, 2);
   const rescan = await f.operate(token, "preview_whatsapp_import", { chatId });
-  assert.equal(rescan.candidates.length, 0);
-  assert.equal(rescan.duplicates, 2);
+  assert.equal(rescan.candidates.length, 2);
+  assert.equal(rescan.duplicates, 0);
   assert.equal((await f.json("/api/orders")).length, 2);
   assert.equal((await f.json(`/api/forms/${paymentsId}/records`)).length, 2);
+});
+
+test("every WhatsApp preview creates a fresh import even when another preview imported the same messages", async t => {
+  const f = await fixture(t);
+  const preview = () => f.json("/api/whatsapp/preview", {
+    method: "POST", body: { chatId, hours: 24, limit: 10 },
+  });
+  const importPlan = plan => f.json("/api/whatsapp/import", {
+    method: "POST", body: { planId: plan.planId, fingerprint: plan.fingerprint },
+  }, 201);
+  const first = await preview(), second = await preview();
+  const imported = await importPlan(first), reimported = await importPlan(second);
+  assert.equal(imported.imported, 2);
+  assert.equal(reimported.imported, 2);
+  assert.equal(reimported.duplicates, 0);
+  assert.equal(new Set([...imported.orders, ...reimported.orders].map(order => order.id)).size, 4);
+  assert.deepEqual(reimported.orders.map(order => order.source.messageId),
+    imported.orders.map(order => order.source.messageId));
+  assert.equal((await f.json("/api/orders")).length, 4);
+  const { payments } = (await f.json(`/api/bootstrap?spaceId=${ORDER_SPACE_ID}`)).orders.tables;
+  assert.equal((await f.json(`/api/forms/${payments}/records`)).length, 4);
+  const replayed = await importPlan(second);
+  assert.equal(replayed.replayed, true);
+  assert.deepEqual(replayed.orders, reimported.orders);
+  assert.equal((await f.json("/api/orders")).length, 4);
+});
+
+test("last-24-hours preview rescans all messages regardless of active or deleted orders", async t => {
+  const f = await fixture(t);
+  const plan = await f.json("/api/whatsapp/preview", {
+    method: "POST", body: { chatId, hours: 24, limit: 10 },
+  });
+  const imported = await f.json("/api/whatsapp/import", {
+    method: "POST", body: { planId: plan.planId, fingerprint: plan.fingerprint },
+  }, 201);
+  const [deleted, retained] = imported.orders;
+  await f.json(`/api/records/${deleted.id}`, {
+    method: "DELETE", body: { version: deleted.version },
+  });
+  const replayed = await f.json("/api/whatsapp/import", {
+    method: "POST", body: { planId: plan.planId, fingerprint: plan.fingerprint },
+  }, 201);
+  assert.equal(replayed.replayed, true);
+  assert.deepEqual(replayed.orders, imported.orders);
+  assert.equal((await f.json("/api/orders")).length, 1);
+  const rescan = await f.json("/api/whatsapp/preview", {
+    method: "POST", body: { chatId, hours: 24, limit: 10 },
+  });
+  assert.equal(rescan.candidates.length, 2);
+  assert.equal(rescan.duplicates, 0);
+  const reimported = await f.json("/api/whatsapp/import", {
+    method: "POST", body: { planId: rescan.planId, fingerprint: rescan.fingerprint },
+  }, 201);
+  assert.equal(reimported.imported, 2);
+  const replacement = reimported.orders.find(order => order.source.messageId === deleted.source.messageId);
+  assert.notEqual(replacement.id, deleted.id);
+  assert.equal(replacement.source.messageId, deleted.source.messageId);
+  assert.equal(replacement.customerName, "Lee");
+  assert.equal(replacement.messageSentAt, "2026-10-24T15:00");
+  assert.equal(replacement.reviewed, false);
+  assert.equal(replacement.totalAmount, null);
+  assert.deepEqual(new Set((await f.json("/api/orders")).map(order => order.id)),
+    new Set([retained.id, ...reimported.orders.map(order => order.id)]));
+  const { payments } = (await f.json(`/api/bootstrap?spaceId=${ORDER_SPACE_ID}`)).orders.tables;
+  assert.deepEqual(new Set((await f.json(`/api/forms/${payments}/records`)).map(record => record.values.order)),
+    new Set([retained.id, ...reimported.orders.map(order => order.id)]));
+  await f.json(`/api/orders/${deleted.id}`, {}, 404);
+  const repeated = await f.json("/api/whatsapp/preview", {
+    method: "POST", body: { chatId, hours: 24, limit: 10 },
+  });
+  assert.equal(repeated.candidates.length, 2);
+  assert.equal(repeated.duplicates, 0);
 });
 
 test("members cannot read the linked WhatsApp account through app routes or full-access Agent tokens", async t => {

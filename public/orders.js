@@ -10,6 +10,14 @@ const money = (value, currency = "MYR") => {
 };
 const date = value => value ? new Intl.DateTimeFormat(getLocale(), { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value)) : "—";
 const dateTime = value => value ? new Intl.DateTimeFormat(getLocale(), { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value)) : "—";
+const messageTime = value => {
+  if (!value) return "—";
+  const instant = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}+08:00`;
+  return new Intl.DateTimeFormat(getLocale(), {
+    timeZone: "Asia/Singapore", day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(new Date(instant));
+};
 const localDateTime = value => {
   if (!value) return "";
   const parsed = new Date(value);
@@ -138,7 +146,7 @@ export function initOrders({ api, icons, toast, getState }) {
       </div>
       <div class="table-clip order-table-clip"><table class="data-table order-table" aria-label="Orders">
         <thead><tr>
-          <th>Order number</th><th>Order date</th><th>Customer</th><th>Department</th><th>Salesperson</th><th>Verification</th><th>Order status</th><th>Delivery status</th><th>Estimated delivery date</th><th>Actual delivery time</th><th>Order amount</th><th>Paid in full</th><th>Invoiced amount</th><th>Attachments</th><th>Notes</th><th><span class="sr-only">Actions</span></th>
+          <th>Order number</th><th>Order date</th><th>Customer</th><th title="Malaysia time (UTC+08:00)">Message sent at</th><th>Department</th><th>Salesperson</th><th>Verification</th><th>Order status</th><th>Delivery status</th><th>Estimated delivery date</th><th>Actual delivery time</th><th>Order amount</th><th>Paid in full</th><th>Invoiced amount</th><th>Attachments</th><th>Notes</th><th><span class="sr-only">Actions</span></th>
         </tr></thead>
         <tbody>${visible.map(renderOrderRow).join("")}</tbody>
       </table>${visible.length ? "" : html`<div class="empty-state order-empty"><span class="empty-mark">${icon("clipboard-x")}</span><h3>${uiText(all.length ? "No matching orders" : "No orders yet")}</h3>${canEdit() && !all.length ? html`<button type="button" class="button button-secondary" data-order-new>${icon("plus")}<span>New order</span></button>` : ""}</div>`}</div>
@@ -158,6 +166,7 @@ export function initOrders({ api, icons, toast, getState }) {
       <td><button type="button" class="order-number-link" data-order-open="${esc(order.id)}">${esc(orderNumber(order))}</button></td>
       <td class="nowrap">${esc(date(orderDate(order)))}</td>
       <td><span class="order-customer">${esc(customer)}</span>${order.customerPhone ? html`<small>${esc(order.customerPhone)}</small>` : ""}</td>
+      <td class="nowrap" title="Malaysia time (UTC+08:00)">${esc(messageTime(order.messageSentAt))}</td>
       <td>${esc(order.department || "—")}</td><td>${esc(order.salesperson || order.salespersonName || "—")}</td>
       <td>${verificationBadge(order)}</td><td>${status(order.status)}</td><td>${status(deliveryStatus(order))}</td>
       <td>${esc(date(order.estimatedDeliveryAt))}</td><td>${esc(dateTime(actualDelivery(order)))}</td>
@@ -203,7 +212,7 @@ export function initOrders({ api, icons, toast, getState }) {
   }
 
   function emptyDraft() {
-    return { customerName: "", customerPhone: "", department: "", salesperson: state().user?.displayName || state().user?.username || "", fulfillment: "", deliveryAddress: "", requestedTime: "", estimatedDeliveryAt: "", notes: "", sourceText: "", totalAmount: null, attachments: [], issues: [], reviewed: false };
+    return { customerName: "", customerPhone: "", messageSentAt: "", department: "", salesperson: state().user?.displayName || state().user?.username || "", fulfillment: "", deliveryAddress: "", requestedTime: "", estimatedDeliveryAt: "", notes: "", sourceText: "", totalAmount: null, attachments: [], issues: [], reviewed: false };
   }
 
   function renderEditor() {
@@ -217,6 +226,7 @@ export function initOrders({ api, icons, toast, getState }) {
     $("order-source-text").value = data.sourceText || "";
     $("order-customer-name").value = data.customerName || "";
     $("order-customer-phone").value = data.customerPhone || "";
+    $("order-message-sent-at").value = data.messageSentAt || "";
     $("order-department").value = data.department || "";
     $("order-salesperson").value = data.salesperson || "";
     $("order-fulfillment").value = data.fulfillment || "";
@@ -303,7 +313,9 @@ export function initOrders({ api, icons, toast, getState }) {
         editorMode = "edit";
         editorOrder = structuredClone(extracted);
       }
-      draft = { ...draft, ...extracted, totalAmount: manualAmount, fulfillment: extracted.fulfillment || "", sourceText: text, issues: extracted.issues || [], reviewed: false };
+      const customerName = !importing && editorOrder?.source?.channel === "whatsapp"
+        ? draft.customerName : extracted.customerName;
+      draft = { ...draft, ...extracted, customerName, totalAmount: manualAmount, fulfillment: extracted.fulfillment || "", sourceText: text, issues: extracted.issues || [], reviewed: false };
       renderEditor();
       if (importing) {
         toast(extracted.intakeDuplicate ? "This order was already imported." : "Order imported for verification.");
@@ -318,6 +330,7 @@ export function initOrders({ api, icons, toast, getState }) {
     if (!draft) draft = emptyDraft();
     draft.customerName = $("order-customer-name").value.trim();
     draft.customerPhone = $("order-customer-phone").value.trim();
+    draft.messageSentAt = $("order-message-sent-at").value || null;
     draft.department = $("order-department").value.trim();
     draft.salesperson = $("order-salesperson").value.trim();
     draft.fulfillment = $("order-fulfillment").value;
@@ -341,7 +354,7 @@ export function initOrders({ api, icons, toast, getState }) {
       if (!["pickup", "delivery"].includes(draft.fulfillment)) return setError("order-editor-error", "Choose pickup or delivery.");
       if (draft.fulfillment === "delivery" && !draft.deliveryAddress) return setError("order-editor-error", "Delivery address is required for delivery orders.");
     }
-    const body = { spaceId: spaceId(), customerName: draft.customerName || null, customerPhone: draft.customerPhone || null, department: draft.department || null, salesperson: draft.salesperson || null, fulfillment: draft.fulfillment || null, deliveryAddress: draft.deliveryAddress || null, estimatedDeliveryAt: draft.estimatedDeliveryAt || null, requestedTime: draft.requestedTime || null, notes: draft.notes || null, sourceText: draft.sourceText || null, attachments: draft.attachments || [], totalAmount: draft.totalAmount, reviewed: draft.reviewed };
+    const body = { spaceId: spaceId(), customerName: draft.customerName || null, customerPhone: draft.customerPhone || null, messageSentAt: draft.messageSentAt || null, department: draft.department || null, salesperson: draft.salesperson || null, fulfillment: draft.fulfillment || null, deliveryAddress: draft.deliveryAddress || null, estimatedDeliveryAt: draft.estimatedDeliveryAt || null, requestedTime: draft.requestedTime || null, notes: draft.notes || null, sourceText: draft.sourceText || null, attachments: draft.attachments || [], totalAmount: draft.totalAmount, reviewed: draft.reviewed };
     if (editorMode === "edit") body.version = editorOrder.version;
     const token = generation; busy = true; updateBusyControls();
     $("order-editor-error").hidden = true;
@@ -399,7 +412,7 @@ export function initOrders({ api, icons, toast, getState }) {
       <div class="order-detail-actions">${!order.reviewed && order.canEdit && canEdit() ? html`<button type="button" class="button button-primary" data-order-review>${icon("clipboard-check")}<span>Review order</span></button>` : ""}${actionButtons(order)}</div>
       <div class="order-detail-grid">
         <section class="order-detail-section"><div class="section-heading"><h3>Order details</h3></div><dl class="order-info-list">
-          ${[["Department", order.department], ["Salesperson", order.salesperson], ["Requested time", order.requestedTime], ["Estimated delivery", dateTime(order.estimatedDeliveryAt)], ["Actual delivery time", dateTime(actualDelivery(order))]].map(([label, value]) => html`<div><dt>${uiText(label)}</dt><dd>${esc(value || "—")}</dd></div>`).join("")}
+          ${[["Message sent at", messageTime(order.messageSentAt)], ["Department", order.department], ["Salesperson", order.salesperson], ["Requested time", order.requestedTime], ["Estimated delivery", dateTime(order.estimatedDeliveryAt)], ["Actual delivery time", dateTime(actualDelivery(order))]].map(([label, value]) => html`<div><dt>${uiText(label)}</dt><dd>${esc(value || "—")}</dd></div>`).join("")}
         </dl><div class="section-heading"><h3>Notes</h3></div><p class="order-notes">${esc(order.notes || "—")}</p>
         <div class="section-heading"><h3>Attachments</h3></div>${renderFieldCell({ type: "attachment" }, order.attachments || [], { catalog: [] })}</section>
         <section class="order-detail-section"><div class="section-heading"><h3>Payment confirmation</h3></div>
@@ -737,11 +750,11 @@ export function initOrders({ api, icons, toast, getState }) {
     const candidates = plan?.candidates || [];
     $("whatsapp-plan").hidden = !plan;
     $("whatsapp-plan").innerHTML = plan ? html`<div class="section-heading"><h3>Order preview</h3><span class="section-count">${candidates.length}</span></div>
-      <div class="whatsapp-preview-counts"><span>${uiText("Messages scanned")}: ${Number(plan.counts?.scanned || 0)}</span><span>${uiText("Duplicates skipped")}: ${Number(plan.counts?.duplicates || 0)}</span>${plan.truncated ? html`<span>Read limit reached</span>` : ""}</div>
-      <div class="table-clip whatsapp-preview-table"><table class="data-table"><thead><tr><th>Customer</th><th>Fulfillment</th><th>Requested time</th><th>Notes</th></tr></thead><tbody>${candidates.map(candidate => {
+      <div class="whatsapp-preview-counts"><span>${uiText("Messages scanned")}: ${Number(plan.counts?.scanned || 0)}</span><span>${uiText("Order candidates")}: ${candidates.length}</span>${plan.truncated ? html`<span>Read limit reached</span>` : ""}</div>
+      <div class="table-clip whatsapp-preview-table"><table class="data-table"><thead><tr><th>Customer</th><th title="Malaysia time (UTC+08:00)">Message sent at</th><th>Fulfillment</th><th>Requested time</th><th>Notes</th></tr></thead><tbody>${candidates.map(candidate => {
         const order = candidate.draft || {};
-        return html`<tr><td>${esc(order.customerName || "—")}</td><td>${order.fulfillment ? uiText(order.fulfillment === "pickup" ? "Pickup" : "Delivery") : "—"}</td><td>${esc(order.requestedTime || "—")}</td><td>${esc(order.notes || "—")}${candidate.text ? html`<details class="whatsapp-source-message"><summary>Customer message</summary><p>${esc(candidate.text)}</p></details>` : ""}</td></tr>`;
-      }).join("")}</tbody></table>${candidates.length ? "" : html`<div class="workflow-empty">No new orders found</div>`}</div>` : "";
+        return html`<tr><td>${esc(order.customerName || "—")}</td><td class="nowrap">${esc(messageTime(order.messageSentAt))}</td><td>${order.fulfillment ? uiText(order.fulfillment === "pickup" ? "Pickup" : "Delivery") : "—"}</td><td>${esc(order.requestedTime || "—")}</td><td>${esc(order.notes || "—")}${candidate.text ? html`<details class="whatsapp-source-message"><summary>Customer message</summary><p>${esc(candidate.text)}</p></details>` : ""}</td></tr>`;
+      }).join("")}</tbody></table>${candidates.length ? "" : html`<div class="workflow-empty">No orders found</div>`}</div>` : "";
     updateWhatsAppControls();
   }
 
@@ -832,6 +845,7 @@ export function initOrders({ api, icons, toast, getState }) {
         <div class="order-ai-capture"><label class="builder-label" for="order-source-text">Customer message</label><textarea id="order-source-text" rows="4" maxlength="40000" placeholder="Paste a WhatsApp order or customer message here..."></textarea><div class="order-ai-actions"><button type="button" class="button button-secondary" id="order-extract">${icon("sparkles")}<span id="order-extract-label">Import order</span></button></div></div>
         <div class="form-fields order-editor-fields">
           <div class="order-field-grid"><label class="input-field"><span class="builder-label">Customer</span><input class="standalone-input" id="order-customer-name" maxlength="200"></label><label class="input-field"><span class="builder-label">Phone</span><input class="standalone-input" id="order-customer-phone" maxlength="80"></label><label class="input-field"><span class="builder-label">Department</span><input class="standalone-input" id="order-department" maxlength="200"></label><label class="input-field"><span class="builder-label">Salesperson</span><input class="standalone-input" id="order-salesperson" maxlength="200"></label></div>
+          <label class="input-field"><span class="builder-label">Message sent at</span><input class="standalone-input" id="order-message-sent-at" type="datetime-local" title="Malaysia time (UTC+08:00)"></label>
           <div class="order-field-grid"><label class="input-field"><span class="builder-label">Fulfillment</span><select class="standalone-input" id="order-fulfillment"><option value="">Select an option</option><option value="delivery">Delivery</option><option value="pickup">Pickup</option></select></label><label class="input-field order-span-2"><span class="builder-label">Delivery address</span><input class="standalone-input" id="order-address" maxlength="2000"></label><label class="input-field"><span class="builder-label">Requested time</span><input class="standalone-input" id="order-requested-time" placeholder="Original customer wording" maxlength="500"></label><label class="input-field"><span class="builder-label">Estimated delivery</span><input class="standalone-input" id="order-estimated-date" type="datetime-local"></label><label class="input-field"><span class="builder-label">Order amount (MYR)</span><input class="standalone-input" id="order-total-amount" type="number" min="0" max="1000000000000" step="0.01" inputmode="decimal"></label></div>
           <label class="input-field"><span class="builder-label">Notes</span><textarea class="standalone-input order-notes-input" id="order-notes" rows="3" maxlength="10000"></textarea></label>
           <div id="order-attachment-field"></div>

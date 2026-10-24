@@ -33,6 +33,51 @@ test("initial setup creates exactly one admin and returns a hashed, expiring ses
   assert.throws(() => auth.setup({ ...adminInput, username: "another.admin" }), { status: 409 });
 });
 
+test("self-registration requires initial setup and always creates an active member", (t) => {
+  const { db, auth } = fixture(t);
+  const input = { username: "New.Member", displayName: "New Member", password: "a new member password" };
+  assert.throws(() => auth.register(input, "before-setup"), { status: 409 });
+  assert.equal(auth.status().setupRequired, true);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM auth_users").get().count, 0);
+  auth.setup(adminInput);
+  const created = auth.register({ ...input, role: "admin", active: false }, "new-device");
+  assert.equal(created.user.username, "new.member");
+  assert.equal(created.user.role, "user");
+  assert.equal(created.user.active, true);
+  assert.equal(auth.authenticate(sessionCookie(created.sessionToken)).id, created.user.id);
+  assert.equal(auth.login(input, "member-login").user.id, created.user.id);
+  assert.equal(auth.permissions(created.user).manageUsers, false);
+  assert.equal(auth.permissions(created.user).manageOrders, true);
+  assert.throws(() => auth.withUser(created.user, () => auth.requireAdmin()), { status: 403 });
+  assert.equal(db.prepare("SELECT password_hash FROM auth_users WHERE id = ?").get(created.user.id).password_hash.includes(input.password), false);
+});
+
+test("self-registration validates credentials and duplicate usernames without leaving users or sessions", (t) => {
+  const { db, auth } = fixture(t);
+  auth.setup(adminInput);
+  for (const input of [
+    { username: "ab", password: "a valid member password" },
+    { username: "new.member", password: "short" },
+    { username: "new.member", displayName: "", password: "a valid member password" },
+  ]) assert.throws(() => auth.register(input, "invalid-input"), { status: 400 });
+  assert.throws(() => auth.register({ ...adminInput, username: "ROOT.ADMIN" }, "duplicate"), { status: 409 });
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM auth_users").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM auth_sessions").get().count, 1);
+});
+
+test("registration is rate limited separately from sign-in and counts successful creation", (t) => {
+  const { auth } = fixture(t);
+  auth.setup(adminInput);
+  const input = { username: "new.member", password: "a valid member password" };
+  auth.register(input, "shared-device");
+  for (let attempt = 1; attempt < 10; attempt++) {
+    assert.throws(() => auth.register(input, "shared-device"), { status: 409 });
+  }
+  assert.throws(() => auth.register({ ...input, username: "next.member" }, "shared-device"), { status: 429 });
+  assert.equal(auth.login(adminInput, "shared-device").user.role, "admin");
+  assert.equal(auth.register({ ...input, username: "other.member" }, "other-device").user.role, "user");
+});
+
 test("login is case insensitive, rejects invalid credentials uniformly, and caps failures by rate key", (t) => {
   const { auth } = fixture(t);
   auth.setup(adminInput);

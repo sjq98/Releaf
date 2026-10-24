@@ -9,7 +9,7 @@ const MAX_AMOUNT = 1e12;
 const STATUSES = ["draft", "accepted", "preparing", "ready", "dispatched", "completed", "cancelled"];
 const ORDER_FIELDS = [
   "customerName", "customerPhone", "department", "salesperson", "fulfillment",
-  "deliveryAddress", "estimatedDeliveryAt", "requestedTime", "notes", "sourceText", "attachments", "totalAmount", "reviewed",
+  "deliveryAddress", "estimatedDeliveryAt", "messageSentAt", "requestedTime", "notes", "sourceText", "attachments", "totalAmount", "reviewed",
 ];
 const fail = (message, status = 400) => { throw new AppError(status, message); };
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -24,6 +24,24 @@ function minute(value) {
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(value)) return value.slice(0, 16);
   const parts = Object.fromEntries(timeFormat.formatToParts(new Date(value)).map(part => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+function dateTime(value, label) {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?$/.test(value) ||
+      !validDate(value.slice(0, 16), true) || Number.isNaN(Date.parse(value))) {
+    fail(`Choose a valid ${label} date.`);
+  }
+  return minute(value);
+}
+export function whatsappOrderFields(source) {
+  if (source?.channel !== "whatsapp") return {};
+  const customerName = [source.chatName, source.sender, source.chatId]
+    .find(value => typeof value === "string" && value.trim());
+  return {
+    customerName: customerName?.trim().slice(0, 200) || null,
+    messageSentAt: dateTime(source.timestamp, "message sent"),
+  };
 }
 const field = (id, name, type = "text", extra = {}) => ({ id, name, type, required: false, unique: false, options: [], ...extra });
 const sum = values => values.reduce((total, value) => total.plus(value), new Decimal(0)).toDecimalPlaces(2).toNumber();
@@ -48,6 +66,7 @@ function orderFields() {
     field("number", "Order number", "text", { required: true, unique: true }),
     field("status", "Order status", "select", { required: true, options: STATUSES }),
     field("customerName", "Customer", "text", { maxLength: 200 }),
+    field("messageSentAt", "Message sent at", "datetime"),
     field("customerPhone", "Phone", "text", { maxLength: 80 }),
     field("department", "Department", "text", { maxLength: 200 }),
     field("salesperson", "Salesperson", "text", { maxLength: 200 }),
@@ -239,12 +258,8 @@ export function createOrderSystem({ db, store }) {
     }
     if (Object.hasOwn(values, "totalAmount")) values.totalAmount = amount(values.totalAmount);
     if (Object.hasOwn(values, "reviewed") && typeof values.reviewed !== "boolean") fail("Order review must be true or false.");
-    if (values.estimatedDeliveryAt) {
-      if (typeof values.estimatedDeliveryAt !== "string" ||
-          !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?$/.test(values.estimatedDeliveryAt) ||
-          !validDate(values.estimatedDeliveryAt.slice(0, 16), true) ||
-          Number.isNaN(Date.parse(values.estimatedDeliveryAt))) fail("Choose a valid estimated delivery date.");
-      values.estimatedDeliveryAt = minute(values.estimatedDeliveryAt);
+    for (const [key, label] of [["estimatedDeliveryAt", "estimated delivery"], ["messageSentAt", "message sent"]]) {
+      if (Object.hasOwn(values, key)) values[key] = dateTime(values[key], label);
     }
     if (values.attachments && (!Array.isArray(values.attachments) || values.attachments.length > 10 ||
         new Set(values.attachments).size !== values.attachments.length)) fail("Choose up to 10 distinct uploaded attachments.");
@@ -482,7 +497,13 @@ export function createOrderSystem({ db, store }) {
         db.prepare("INSERT INTO order_forms VALUES (?, ?, ?)").run(ORDER_SPACE_ID, role, form.id);
         return form;
       };
-      const orders = create("orders", "Orders", orderFields());
+      let orders = create("orders", "Orders", orderFields());
+      if (!orders.fields.some(field => field.id === "messageSentAt")) {
+        const fields = [...orders.fields, orderFields().find(field => field.id === "messageSentAt")];
+        db.prepare("UPDATE forms SET fields_json = ?, version = version + 1, updated_at = ? WHERE id = ?")
+          .run(JSON.stringify(fields), now(), orders.id);
+        orders = table("orders");
+      }
       const orderReference = { formId: orders.id, fieldId: "number" };
       const payments = create("payments", "Payment confirmations", [
         field("number", "Payment confirmation number", "text", { required: true, unique: true }),
@@ -517,6 +538,7 @@ export function createOrderSystem({ db, store }) {
         values.reviewed = values.totalAmount != null && Boolean(values.customerName && values.fulfillment && (values.fulfillment !== "delivery" || values.deliveryAddress));
         values.paymentConfirmed = false; values.actualDeliveryAt = minute(data.actualDeliveryAt);
         values.estimatedDeliveryAt = minute(values.estimatedDeliveryAt);
+        values.messageSentAt = dateTime(values.messageSentAt, "message sent");
         const events = [...(data.events ?? [])];
         if (db.prepare("SELECT 1 FROM unique_values WHERE form_id = ? AND field_id = 'number' AND value_key = ?").get(orders.id, `string:${values.number.toLowerCase()}`)) {
           const previousNumber = values.number; values.number = nextNumber();
@@ -544,6 +566,18 @@ export function createOrderSystem({ db, store }) {
         }
         db.prepare("INSERT INTO order_migrations VALUES (?, ?)").run(row.id, now());
       }
+      for (const row of db.prepare(`SELECT r.id, r.values_json, d.source_json FROM records r
+        JOIN order_details d ON d.order_id = r.id
+        WHERE r.form_id = ? AND r.deleted_at IS NULL AND d.source_json IS NOT NULL`).all(orders.id)) {
+        const values = JSON.parse(row.values_json), source = JSON.parse(row.source_json);
+        if ((values.messageSentAt != null && values.messageSentAt !== "") || source?.channel !== "whatsapp") continue;
+        let messageSentAt;
+        try { messageSentAt = whatsappOrderFields(source).messageSentAt; }
+        catch (error) { if (error instanceof AppError) continue; throw error; }
+        if (messageSentAt == null) continue;
+        db.prepare("UPDATE records SET values_json = ?, version = version + 1, updated_at = ? WHERE id = ?")
+          .run(JSON.stringify({ ...values, messageSentAt }), now(), row.id);
+      }
       return tables();
     });
   }
@@ -556,23 +590,28 @@ export function createOrderSystem({ db, store }) {
     return createHash("sha256").update(JSON.stringify([source.channel, source.accountId ?? null, source.chatId, source.messageId])).digest("hex");
   }
   function findSource(source) {
-    const row = db.prepare("SELECT order_id FROM order_intake_sources WHERE source_key = ?").get(sourceKey(source));
+    const row = db.prepare(`SELECT s.order_id FROM order_intake_sources s
+      JOIN records r ON r.id = s.order_id
+      WHERE s.source_key = ? AND r.deleted_at IS NULL`).get(sourceKey(source));
     return row ? get(row.order_id) : null;
   }
-  function importExtracted({ draft, source, text: sourceText, customerName, customerPhone } = {}) {
+  function importExtracted({ draft, source, text: sourceText, customerName, customerPhone } = {}, { deduplicateSource = true } = {}) {
     const key = source ? sourceKey(source) : null;
     return store.transaction(() => {
-      const existing = source ? findSource(source) : null;
+      const existing = source && deduplicateSource ? findSource(source) : null;
       if (existing) return { ...existing, intakeDuplicate: true };
       if (!object(draft) || draft.isOrder !== true) return { skipped: true, reason: "not_an_order" };
       const body = {};
       for (const name of ORDER_FIELDS) if (Object.hasOwn(draft, name)) body[name] = draft[name];
       body.customerName ??= customerName ?? null; body.customerPhone ??= customerPhone ?? null;
+      Object.assign(body, whatsappOrderFields(source));
       if (sourceText !== undefined) body.sourceText = sourceText;
       body.totalAmount = null; body.reviewed = false;
       const order = create(body);
       const data = details(order.id); data.source = source ? structuredClone(source) : null; saveDetails(order.id, data);
-      if (key) db.prepare("INSERT INTO order_intake_sources VALUES (?, ?, ?)").run(key, order.id, now());
+      if (key) db.prepare(`INSERT INTO order_intake_sources VALUES (?, ?, ?)
+        ON CONFLICT(source_key) DO UPDATE SET order_id = excluded.order_id, created_at = excluded.created_at`)
+        .run(key, order.id, now());
       event(order.id, "imported", "Customer message imported for human review");
       return get(order.id);
     });

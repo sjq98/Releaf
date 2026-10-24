@@ -5,7 +5,7 @@ const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
 
 export function initAuth({ api, icons, onAuthenticated, onSignedOut }) {
   const $ = id => document.getElementById(id);
-  let user = null, permissions = {}, setupRequired = false, busy = false, users = [], sequence = 0;
+  let user = null, permissions = {}, setupRequired = false, registering = false, busy = false, users = [], sequence = 0;
   const screen = document.createElement("main");
   screen.id = "auth-screen";
   screen.className = "auth-screen";
@@ -32,10 +32,20 @@ export function initAuth({ api, icons, onAuthenticated, onSignedOut }) {
   }
   function renderScreen(message = "") {
     screen.hidden = false;
-    screen.innerHTML = html`<section class="auth-content"><a class="brand auth-brand" href="#records"><span class="brand-mark">${icon("leaf")}</span><span class="brand-copy"><strong>Releaf</strong><span>WORKSPACE</span></span></a><div class="auth-heading"><span class="eyebrow">WAREHOUSE WORKSPACE</span><h1>${uiText(setupRequired ? "Create administrator" : "Sign in")}</h1><p>${uiText(setupRequired ? "Set up the first administrator for this workspace." : "Sign in to your workspace account.")}</p></div><form id="auth-form"><div class="form-fields"><label class="input-field"><span>Username</span><input id="auth-username" class="standalone-input" required minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{2,31}" autocomplete="username" autocapitalize="none" spellcheck="false" ${busy ? "disabled" : ""}></label>${setupRequired ? html`<label class="input-field"><span>Display name</span><input id="auth-display-name" class="standalone-input" required maxlength="80" autocomplete="name" ${busy ? "disabled" : ""}></label>` : ""}<label class="input-field"><span>Password</span><input id="auth-password" class="standalone-input" type="password" required ${setupRequired ? 'minlength="12"' : ""} maxlength="1024" autocomplete="${setupRequired ? "new-password" : "current-password"}" ${busy ? "disabled" : ""}></label>${setupRequired ? html`<p class="auth-password-hint">Use at least 12 characters.</p>` : ""}</div><div id="auth-error" class="form-error" role="alert" ${message ? "" : "hidden"}>${uiText(message)}</div><button class="button button-primary auth-submit" type="submit" ${busy ? "disabled" : ""}>${icon(busy ? "loader-circle" : "log-in")}<span>${uiText(busy ? "Signing in..." : setupRequired ? "Create administrator" : "Sign in")}</span></button></form><div class="auth-language"><select class="language-select" data-language-picker aria-label="Language" title="Language"><option value="en">English</option><option value="zh">中文</option></select></div></section>`;
+    const creating = setupRequired || registering;
+    const title = setupRequired ? "Create administrator" : registering ? "Create account" : "Sign in";
+    const description = setupRequired ? "Set up the first administrator for this workspace."
+      : registering ? "Create a member account for this workspace." : "Sign in to your workspace account.";
+    screen.innerHTML = html`<section class="auth-content"><a class="brand auth-brand" href="#records"><span class="brand-mark">${icon("leaf")}</span><span class="brand-copy"><strong>Releaf</strong><span>WORKSPACE</span></span></a><div class="auth-heading"><span class="eyebrow">WAREHOUSE WORKSPACE</span><h1>${uiText(title)}</h1><p>${uiText(description)}</p></div><form id="auth-form"><div class="form-fields"><label class="input-field"><span>Username</span><input id="auth-username" class="standalone-input" required minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{2,31}" autocomplete="username" autocapitalize="none" spellcheck="false" ${busy ? "disabled" : ""}></label>${creating ? html`<label class="input-field"><span>Display name</span><input id="auth-display-name" class="standalone-input" required maxlength="80" autocomplete="name" ${busy ? "disabled" : ""}></label>` : ""}<label class="input-field"><span>Password</span><input id="auth-password" class="standalone-input" type="password" required ${creating ? 'minlength="12"' : ""} maxlength="1024" autocomplete="${creating ? "new-password" : "current-password"}" ${busy ? "disabled" : ""}></label>${creating ? html`<p class="auth-password-hint">Use at least 12 characters.</p>` : ""}</div><div id="auth-error" class="form-error" role="alert" ${message ? "" : "hidden"}>${uiText(message)}</div><button class="button button-primary auth-submit" type="submit" ${busy ? "disabled" : ""}>${icon(busy ? "loader-circle" : creating ? "user-plus" : "log-in")}<span>${uiText(busy ? creating ? "Creating account..." : "Signing in..." : title)}</span></button></form>${setupRequired ? "" : html`<button id="auth-toggle" type="button" class="auth-toggle" ${busy ? "disabled" : ""}>${uiText(registering ? "Back to sign in" : "Create account")}</button>`}<div class="auth-language"><select class="language-select" data-language-picker aria-label="Language" title="Language"><option value="en">English</option><option value="zh">中文</option></select></div></section>`;
     const language = screen.querySelector("[data-language-picker]");
     language.value = getLanguage();
     $("auth-form").onsubmit = signIn;
+    if ($("auth-toggle")) $("auth-toggle").onclick = () => {
+      if (busy) return;
+      registering = !registering;
+      renderScreen();
+      $("auth-username").focus();
+    };
     icons();
   }
   function renderAccount() {
@@ -59,7 +69,7 @@ export function initAuth({ api, icons, onAuthenticated, onSignedOut }) {
   }
   function clear(message = "") {
     sequence++;
-    user = null; permissions = {}; users = []; busy = false;
+    user = null; permissions = {}; users = []; busy = false; registering = false;
     hideWorkspace(); onSignedOut?.();
     for (const dialog of [usersDialog, editDialog, passwordDialog]) dialog.replaceChildren();
     $("account-menu").replaceChildren();
@@ -70,14 +80,15 @@ export function initAuth({ api, icons, onAuthenticated, onSignedOut }) {
     if (busy || !$("auth-form").reportValidity()) return;
     const body = { username: $("auth-username").value.trim(), password: $("auth-password").value };
     const request = ++sequence;
-    if (setupRequired) body.displayName = $("auth-display-name").value.trim();
+    if (setupRequired || registering) body.displayName = $("auth-display-name").value.trim();
     busy = true;
     $("auth-form").querySelectorAll("input,button").forEach(input => { input.disabled = true; });
+    if ($("auth-toggle")) $("auth-toggle").disabled = true;
     errorAt("auth-error", "");
     try {
-      const session = await api(`/api/auth/${setupRequired ? "setup" : "login"}`, { method: "POST", body: JSON.stringify(body) });
+      const session = await api(`/api/auth/${setupRequired ? "setup" : registering ? "register" : "login"}`, { method: "POST", body: JSON.stringify(body) });
       if (request !== sequence) return;
-      setupRequired = false;
+      setupRequired = false; registering = false;
       await accept(session, request);
       if (request === sequence) $("auth-password").value = "";
     } catch (error) {
@@ -88,6 +99,7 @@ export function initAuth({ api, icons, onAuthenticated, onSignedOut }) {
       if (request === sequence) {
         busy = false;
         $("auth-form")?.querySelectorAll("input,button").forEach(input => { input.disabled = false; });
+        if ($("auth-toggle")) $("auth-toggle").disabled = false;
       }
     }
   }

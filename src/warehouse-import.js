@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import Decimal from "decimal.js";
 import { AppError } from "./errors.js";
-import { decodeFile, parseTableFile } from "./table-import.js";
+import { convertCell, decodeFile, parseTableFile } from "./table-import.js";
 import { inventoryQuantity } from "./quantities.js";
 
 const fail = (message, status = 400) => { throw new AppError(status, message); };
@@ -10,14 +10,22 @@ const normalized = value => String(value ?? "").trim().toLowerCase().replace(/[\
 const identity = value => String(value ?? "").trim().toLowerCase();
 const aliases = {
   code: ["商品编码", "产品编码", "物料编码", "sku", "product code", "item code", "code"],
-  name: ["商品名称", "产品名称", "商品", "入库产品", "出库产品", "product", "product name", "item", "name"],
-  quantity: ["数量", "入库数量", "出库数量", "quantity", "qty", "received quantity", "issued quantity"],
-  unit: ["单位", "unit", "uom"], notes: ["备注", "明细备注", "notes", "remarks"],
-  warehouseCode: ["仓库编码", "warehouse code"], warehouse: ["仓库", "仓库名称", "入库仓库", "出库仓库", "warehouse"],
+  name: ["商品名称", "产品名称", "商品", "入库产品", "出库产品", "product", "product name", "inbound product", "outbound product", "item", "name"],
+  quantity: ["数量", "入库数量", "出库数量", "quantity", "qty", "inbound quantity", "outbound quantity", "received quantity", "issued quantity"],
+  unit: ["单位", "unit", "uom"], notes: ["备注", "明细备注", "notes", "remarks", "line notes", "line remarks"],
+  headerNotes: ["单据备注", "申请备注", "入库备注", "出库备注", "request notes", "document notes", "header notes"],
+  warehouseCode: ["仓库编码", "warehouse code"], warehouse: ["仓库", "仓库名称", "入库仓库", "出库仓库", "warehouse", "warehouse name", "inbound warehouse", "outbound warehouse"],
   kind: ["方向", "出入库", "出入库方向", "direction", "workflow"],
   applicant: ["申请人", "applicant"], approver: ["审批人", "approver"],
   applicationDate: ["申请日期", "application date"],
-  group: ["申请编号", "外部单号", "单据编号", "request", "request number", "document number"],
+  group: ["申请编号", "外部单号", "单据编号", "入库单号", "出库单号", "所属入库单", "所属出库单", "request", "request number", "document number", "external request number", "inbound request", "outbound request", "inbound request number", "outbound request number"],
+  type: ["入库类型", "出库类型", "申请类型", "type", "request type", "inbound type", "outbound type"],
+};
+const inferredDirection = headers => {
+  const has = choices => headers.some(header => choices.some(choice => normalized(header) === normalized(choice)));
+  const incoming = has(["入库数量", "inbound quantity", "received quantity"]);
+  const outgoing = has(["出库数量", "outbound quantity", "issued quantity"]);
+  return incoming === outgoing ? null : incoming ? "inbound" : "outbound";
 };
 const direction = value => {
   const key = normalized(value);
@@ -59,6 +67,27 @@ export function createWarehouseImport({ db, store }) {
       return info(id);
     });
   }
+  function mappingFields(state, kind) {
+    const request = store.getForm(state.tables[kind]), detail = store.getForm(state.tables[`${kind}Lines`]);
+    const requestKeys = { number: "request_number", status: "request_status", notes: "headerNotes",
+      warehouse: "warehouse", applicant: "applicant", approver: "approver", applicationDate: "applicationDate", type: "type" };
+    const lineKeys = { document: "group", product: "name", quantity: "quantity", notes: "notes", status: "line_status", postedDate: "line_postedDate" };
+    const fields = (form, section, keys) => form.fields.map(field => {
+      const key = keys[field.id] ?? `${section === "lines" ? "line" : "request"}_${field.id}`;
+      const managed = (state.managedFields[section === "lines" ? `${kind}Lines` : kind] ?? []).includes(field.id) ||
+        field.id === "applicant" || Boolean(field.formula) || field.type === "attachment";
+      return { key, section, formId: form.id, formName: form.name, fieldId: field.id, name: field.name, type: field.type,
+        reference: field.reference, required: field.required, managed,
+        reason: field.id === "applicant" ? "Signed-in account" : field.id === "number" ? "Automatic number"
+          : field.formula ? "Calculated" : field.type === "attachment" ? "Upload separately"
+            : managed ? "From workflow" : field.id === "document" ? "External request number" : null };
+    });
+    const product = store.getForm(state.tables.products), warehouse = store.getForm(state.tables.warehouses);
+    return [...fields(detail, "lines", lineKeys), ...fields(request, "request", requestKeys),
+      ...[["code", product, "code"], ["unit", product, "unit"], ["warehouseCode", warehouse, "code"]].map(([key, form, id]) => ({
+        key, section: "matching", formId: form.id, fieldId: id, name: form.fields.find(field => field.id === id).name, managed: false,
+      })), { key: "kind", section: "matching", name: "Direction", managed: false, uiLabel: true }];
+  }
   function match(body) {
     const source = file(body.fileId), state = store.warehouse.state(source.spaceId);
     if (!state.tables.products) fail("Set up Warehouse Management in this Space first.");
@@ -67,36 +96,42 @@ export function createWarehouseImport({ db, store }) {
     const sheet = source.sheets[sheetIndex], headers = (sheet.rows[0] ?? []).map(value => String(value ?? ""));
     const rows = sheet.rows.slice(1).map((cells, index) => ({ cells, row: index + 2 })).filter(row => row.cells.some(v => v !== null && String(v).trim() !== ""));
     if (!rows.length || rows.length > 1000) fail("Import 1-1,000 data rows with the header in the first row.");
-    const mapping = {}, errors = [], warnings = [];
+    if (body.kind && !["inbound", "outbound"].includes(body.kind)) fail("Choose inbound or outbound.");
+    const inferred = inferredDirection(headers), kind = body.kind ?? inferred ?? "inbound";
+    const fields = mappingFields(state, kind), mapping = {}, errors = [], warnings = [];
     if (body.mapping !== undefined && (!body.mapping || typeof body.mapping !== "object" || Array.isArray(body.mapping))) fail("Choose valid column mappings.");
-    for (const [key, choices] of Object.entries(aliases)) {
+    for (const field of fields) {
+      const { key } = field;
+      const sharedNotesName = key === "headerNotes" && fields.some(other => other.key !== key && normalized(other.name) === normalized(field.name));
+      const choices = [...(aliases[key] ?? []), ...(sharedNotesName ? [] : [field.name])];
       const matches = headers.flatMap((h, index) => choices.some(alias => normalized(alias) === normalized(h)) ? [index] : []);
       if (Object.hasOwn(body.mapping ?? {}, key)) {
         const index = body.mapping[key];
         if (index !== null && (!Number.isInteger(index) || index < 0 || index >= headers.length)) fail("Choose valid column mappings.");
+        if (field.managed && key !== "applicant" && index !== null) fail("Use the warehouse workflow to change managed stock and status fields.", 409);
         mapping[key] = index;
       } else {
-        mapping[key] = matches.length === 1 ? matches[0] : null;
-        if (matches.length > 1) errors.push({ row: 1, field: key, message: "Several headers match this field. Choose one column." });
+        const readable = !field.managed || key === "applicant";
+        mapping[key] = readable && matches.length === 1 ? matches[0] : null;
+        if (readable && matches.length > 1) errors.push({ row: 1, field: key, message: "Several headers match this field. Choose one column." });
       }
     }
-    if (Object.keys(body.mapping ?? {}).some(key => !Object.hasOwn(aliases, key))) fail("Choose valid column mappings.");
+    if (Object.keys(body.mapping ?? {}).some(key => !fields.some(field => field.key === key))) fail("Choose valid column mappings.");
     if (mapping.code === null && mapping.name === null) errors.push({ row: 1, field: "code", message: "Map a product code or product name column." });
     if (mapping.quantity === null) errors.push({ row: 1, field: "quantity", message: "Map a quantity column." });
     const used = new Set(Object.values(mapping).filter(index => index !== null));
     if (used.size !== Object.values(mapping).filter(index => index !== null).length) errors.push({ row: 1, message: "A source column cannot map to several fields." });
     for (const [index, header] of headers.entries()) if (!used.has(index)) warnings.push({ column: index + 1, header });
     const defaults = body.values ?? {}, matched = [], groups = new Map();
-    const user = store.auth.currentUser();
+    const user = store.auth.currentUser(), referenceCache = new Map();
     if (!defaults || typeof defaults !== "object" || Array.isArray(defaults)) fail("Enter request defaults.");
-    if (body.kind && !["inbound", "outbound"].includes(body.kind)) fail("Choose inbound or outbound.");
     const lookup = (records, value, key, label) => {
       const found = records.filter(row => identity(row.values[key]) === identity(value));
       if (found.length !== 1) fail(found.length ? `${label} is ambiguous: ${value}` : `${label} was not found: ${value}`);
       return found[0];
     };
     if (!errors.length) for (const row of rows) {
-      const cell = key => mapping[key] === null ? "" : String(row.cells[mapping[key]] ?? "").trim();
+      const cell = key => mapping[key] == null ? "" : String(row.cells[mapping[key]] ?? "").trim();
       try {
         const code = cell("code"), name = cell("name");
         if (!code && !name) fail("Enter a product code or name.");
@@ -112,36 +147,62 @@ export function createWarehouseImport({ db, store }) {
         if (cell("warehouseCode") || cell("warehouse")) {
           const selected = cell("warehouseCode") ? lookup(state.warehouses, cell("warehouseCode"), "code", "Warehouse")
             : state.warehouses.find(r => identity(r.values.code) === identity(cell("warehouse"))) ?? lookup(state.warehouses, cell("warehouse"), "name", "Warehouse");
-          if (warehouse && warehouse.id !== selected.id) fail("The row warehouse differs from the selected warehouse.");
+          if (!body.linesOnly && warehouse && warehouse.id !== selected.id) fail("The row warehouse differs from the selected warehouse.");
           if (cell("warehouseCode") && cell("warehouse") && ![selected.values.code, selected.values.name].some(v => identity(v) === identity(cell("warehouse")))) fail("Warehouse code and name do not match.");
           warehouse = selected;
         }
-        const inferred = headers.some(h => h.trim() === "入库数量") && !headers.some(h => h.trim() === "出库数量") ? "inbound" : headers.some(h => h.trim() === "出库数量") && !headers.some(h => h.trim() === "入库数量") ? "outbound" : null;
         const rowKind = cell("kind") ? direction(cell("kind")) : body.kind ?? inferred;
         if (cell("kind") && !rowKind || body.kind && rowKind !== body.kind) fail("The row direction does not match the selected workflow.");
         const line = { product: product.id, quantity, notes };
-        matched.push({ row: row.row, ...line, code: product.values.code, name: product.values.name, unit: product.values.unit });
-        const values = { ...defaults, ...(warehouse ? { warehouse: warehouse.id } : {}) };
-        for (const key of ["applicant", "approver", "applicationDate"]) if (cell(key)) {
-          const value = key === "applicationDate" ? cell(key).slice(0, 10) : cell(key);
-          if (defaults[key] && defaults[key] !== value) fail(`The row ${key} differs from the request defaults.`);
-          values[key] = value;
+        const imported = (cell("warehouseCode") || cell("warehouse")) && warehouse ? { warehouse: warehouse.id } : {};
+        for (const field of fields.filter(field => !field.managed || field.key === "applicant" && !user)) {
+          if (field.section === "matching" || ["group", "name", "quantity", "notes", "warehouse"].includes(field.key) || !cell(field.key)) continue;
+          const targetId = state.tables[`${rowKind ?? kind}${field.section === "lines" ? "Lines" : ""}`];
+          const schema = store.getForm(targetId).fields.find(item => item.id === field.fieldId);
+          if (!schema) fail("The target workflow does not contain this mapped field.");
+          const value = convertCell(row.cells[mapping[field.key]], schema, store, referenceCache);
+          if (field.section === "lines") line[field.fieldId] = value;
+          else {
+            if (!body.linesOnly && defaults[field.fieldId] && defaults[field.fieldId] !== value) fail(`The row ${field.fieldId} differs from the request defaults.`);
+            imported[field.fieldId] = value;
+          }
         }
+        const values = { ...defaults, ...imported, ...(warehouse ? { warehouse: warehouse.id } : {}) };
         if (user) values.applicant = user.username;
+        if (user && cell("applicant") && cell("applicant") !== user.username && !warnings.some(warning => warning.message)) {
+          warnings.push({ column: mapping.applicant + 1, header: headers[mapping.applicant], message: "The spreadsheet applicant is ignored; the signed-in account remains the applicant." });
+        }
         if (!body.linesOnly && (!warehouse || !rowKind)) fail("Choose a direction and warehouse, or map their columns.");
         const key = body.linesOnly ? "lines" : JSON.stringify([rowKind, values, cell("group")]);
-        if (!groups.has(key)) groups.set(key, { kind: rowKind, values, lines: [], sourceRows: [] });
-        const group = groups.get(key), existing = group.lines.find(l => l.product === line.product);
+        if (!groups.has(key)) groups.set(key, { kind: rowKind, values, requestValues: {}, externalNumber: cell("group"), lines: [], sourceRows: [] });
+        const group = groups.get(key);
+        if (body.linesOnly) {
+          if (rowKind && group.kind && group.kind !== rowKind || cell("group") && group.externalNumber && cell("group") !== group.externalNumber) fail("Import only one request at a time in this workflow.");
+          for (const [fieldId, value] of Object.entries(imported)) {
+            if (Object.hasOwn(group.requestValues, fieldId) && hash(group.requestValues[fieldId]) !== hash(value)) fail("Request fields must have the same value on every row.");
+          }
+          group.kind ??= rowKind;
+          group.externalNumber ||= cell("group");
+        }
+        Object.assign(group.requestValues, imported);
+        Object.assign(group.values, imported);
+        const existing = group.lines.find(l => l.product === line.product);
         if (existing) {
+          for (const field of fields.filter(item => item.section === "lines" && item.key.startsWith("line_") && !item.managed)) {
+            if (Object.hasOwn(existing, field.fieldId) && Object.hasOwn(line, field.fieldId) && hash(existing[field.fieldId]) !== hash(line[field.fieldId])) fail("Repeated product lines have conflicting custom field values.");
+          }
+          Object.assign(existing, Object.fromEntries(Object.entries(line).filter(([id]) => !["product", "quantity", "notes"].includes(id))));
           existing.quantity = inventoryQuantity(new Decimal(existing.quantity).plus(quantity).toNumber(), "Line quantity");
           if (notes && notes !== existing.notes) existing.notes = [existing.notes, notes].filter(Boolean).join("; ");
         } else group.lines.push(line);
         group.sourceRows.push(row.row);
+        matched.push({ row: row.row, ...line, code: product.values.code, name: product.values.name, unit: product.values.unit });
       } catch (error) { errors.push({ row: row.row, message: error.message }); }
     }
     const documents = [...groups.values()];
     if (documents.length > 20 || documents.reduce((n, doc) => n + doc.lines.length, 0) > 100) errors.push({ row: 0, message: "A batch supports up to 20 requests and 100 distinct product lines." });
-    return { fileId: source.id, spaceId: source.spaceId, fileName: source.name, sheetIndex, sheetName: sheet.name, headers, mapping, warnings, errors, rowCount: rows.length, matchedRows: matched, documents };
+    return { fileId: source.id, spaceId: source.spaceId, fileName: source.name, sheetIndex, sheetName: sheet.name, headers, mapping, mappingFields: fields,
+      requestValues: body.linesOnly ? documents[0]?.requestValues ?? {} : {}, warnings, errors, rowCount: rows.length, matchedRows: matched, documents };
   }
   function keyFor(body, plan) {
     return hash({ fileId: body.fileId, sheetIndex: body.sheetIndex ?? 0, documents: plan.documents.map(({ kind, values, lines }) => ({ kind, values, lines })) });

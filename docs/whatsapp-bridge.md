@@ -128,22 +128,34 @@ has stopped. Connector availability, WhatsApp readiness and a successfully
 loaded conversation list are separate states.
 
 Source metadata retains the account ID, exact chat ID, exact message ID, chat
-name, sender and timestamp. Existing sources are checked before model
-extraction. The model's validated `isOrder` result controls whether a message
+name, sender and timestamp. Every preview reads and classifies the selected
+messages afresh without looking up previously imported or deleted orders.
+The model's validated `isOrder` result controls whether a message
 is an order candidate; customer/source text remains untrusted data.
 Amounts are forced to null even if an upstream extraction result contains one.
+Customer is filled from the WhatsApp conversation name, falling back to the
+sender ID and then the chat ID when no name is available. An AI-extracted name
+in the message body does not replace it. Message sent at uses the source
+timestamp, converted to Malaysia time (UTC+08:00) at minute precision; a missing
+timestamp stays blank and is never replaced with the import time. Both values
+appear in the preview, Orders form and order details.
 
 Plans expire after 30 minutes, are bound to their creator and carry a
 fingerprint. `importMessages` is synchronous and transaction-compatible:
 normal Agent review can run the complete operation in a rollback preview and
 apply it only after approval. A failure rolls back the whole import. Retrying
-an applied plan returns its original result; replaying the same source through
-another plan does not create a second order.
+an applied plan returns its original result. Importing a different preview
+creates new orders even when it contains messages imported by an earlier plan.
+The source mapping points to the latest imported order while each order retains
+its own source metadata. The legacy `duplicates` response fields remain zero for
+compatibility; historical source deduplication is disabled for the WhatsApp bridge.
 
-This identifies repeated delivery of the same WhatsApp message, not every
-semantic duplicate. If a customer sends two different messages requesting the
-same goods, both might be genuine new orders. Human review must resolve that
-ambiguity instead of merging solely by amount or text.
+Previously, resolving retained source mappings could make a later preview fail
+with "Order record not found." Neither WhatsApp preview nor import resolves old
+orders now. Deleted orders stay deleted; fresh imports create new unreviewed
+orders and linked unpaid confirmation records. Replaying an already applied
+plan still returns its original result without recreating deleted records.
+Human review must resolve repeated orders when importing overlapping time ranges.
 
 ## Privacy and Verification
 
@@ -156,7 +168,8 @@ Do not describe this workflow as data that never leaves the machine.
 
 Tests use mock clients, fake providers and isolated in-memory SQLite. They
 cover exact identity selection, authentication, role checks, non-order
-filtering, deduplication, transaction rollback, preview expiry and replay.
+filtering, repeated scans and imports, deleted source orders, transaction rollback,
+preview expiry and same-plan replay.
 HTTP integration tests also exercise Agent review and approval against the
 real application: preview writes no orders, approval creates linked payment
 records, and both Space restrictions and the import owner's current role are

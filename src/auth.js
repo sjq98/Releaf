@@ -139,12 +139,12 @@ export function createAuth(db) {
     return tokenHash(value);
   }
 
-  function assertLoginRate(rateKey) {
+  function assertLoginRate(rateKey, message = "Too many sign-in attempts. Try again in 15 minutes.") {
     const key = rateKeyFor(rateKey);
     const now = Date.now();
     const row = db.prepare("SELECT window_start, failures FROM auth_login_attempts WHERE rate_key = ?").get(key);
     if (row && now - row.window_start < LOGIN_WINDOW_MS && row.failures >= LOGIN_FAILURE_LIMIT) {
-      fail(429, "Too many sign-in attempts. Try again in 15 minutes.");
+      fail(429, message);
     }
     return key;
   }
@@ -174,6 +174,25 @@ export function createAuth(db) {
     const user = findUser(id);
     if (!user) fail(404, "User not found.");
     return user;
+  }
+
+  function insertUser({ username, displayName: name, password, role } = {}) {
+    const normalizedUsername = canonicalUsername(username);
+    const normalizedName = displayName(name ?? username);
+    const normalizedPassword = passwordHash(passwordValue(password));
+    if (!USER_ROLES.has(role)) fail(400, "Choose the admin or user role.");
+    const id = randomBytes(16).toString("hex");
+    const now = new Date().toISOString();
+    try {
+      db.prepare(`INSERT INTO auth_users (id, username, display_name, role, active, password_hash, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?)`).run(id, normalizedUsername, normalizedName, role, normalizedPassword, now, now);
+    } catch (error) {
+      if (String(error.message).includes("UNIQUE constraint failed: auth_users.username")) {
+        fail(409, "That username is already in use.");
+      }
+      throw error;
+    }
+    return getUser(id);
   }
 
   function currentUser() {
@@ -208,6 +227,17 @@ export function createAuth(db) {
           VALUES (?, ?, ?, 'admin', 1, ?, ?, ?)`).run(id, normalizedUsername, normalizedName, encodedPassword, now, now);
         const sessionToken = createSession(id);
         return { user: getUser(id), sessionToken };
+      });
+    },
+
+    register({ username, displayName: name, password } = {}, rateKey) {
+      const key = assertLoginRate(`register:${rateKey ?? "unknown-client"}`,
+        "Too many account creation attempts. Try again in 15 minutes.");
+      recordLoginFailure(key);
+      return transaction(() => {
+        if (!activeAdminCount()) fail(409, "Create the initial administrator before registering an account.");
+        const user = insertUser({ username, displayName: name, password, role: "user" });
+        return { user, sessionToken: createSession(user.id) };
       });
     },
 
@@ -273,24 +303,7 @@ export function createAuth(db) {
 
     createUser({ username, displayName: name, password, role } = {}) {
       requireAdmin();
-      const normalizedUsername = canonicalUsername(username);
-      const normalizedName = displayName(name ?? username);
-      const normalizedPassword = passwordHash(passwordValue(password));
-      if (!USER_ROLES.has(role)) throw new AppError(400, "Choose the admin or user role.");
-      return transaction(() => {
-        const id = randomBytes(16).toString("hex");
-        const now = new Date().toISOString();
-        try {
-          db.prepare(`INSERT INTO auth_users (id, username, display_name, role, active, password_hash, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?)`).run(id, normalizedUsername, normalizedName, role, normalizedPassword, now, now);
-        } catch (error) {
-          if (String(error.message).includes("UNIQUE constraint failed: auth_users.username")) {
-            throw new AppError(409, "That username is already in use.");
-          }
-          throw error;
-        }
-        return getUser(id);
-      });
+      return transaction(() => insertUser({ username, displayName: name, password, role }));
     },
 
     updateUser(id, updates = {}) {

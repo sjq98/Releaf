@@ -38,7 +38,7 @@ export async function parseTableFile(file) {
   });
 }
 
-function convertCell(value, field, store, referenceCache) {
+export function convertCell(value, field, store, referenceCache) {
   if (value === null || value === undefined || value === "") return field.type === "checkbox" ? false : null;
   if (field.type === "number") {
     const text = String(value).trim();

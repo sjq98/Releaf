@@ -8,7 +8,7 @@
 .orders-toolbar .search-box { flex: 1 1 200px; width: auto; }
 .orders-toolbar .filter-select { min-width: 155px; }
 .order-table-clip { max-height: 65vh; }
-.order-table { min-width: 2180px; }
+.order-table { min-width: 2360px; }
 .order-table thead { position: sticky; top: 0; z-index: 1; }
 .order-table td small { display: block; margin-top: 4px; color: var(--ink-faint); font-size: 11px; }
 .order-table .numeric { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

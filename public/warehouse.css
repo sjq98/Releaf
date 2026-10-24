@@ -4,8 +4,23 @@
 .warehouse-request-list { margin-bottom: 28px; }
 .warehouse-import-source { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-bottom: 24px; }
 .warehouse-import-mapping { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 16px 0; }
+.warehouse-mapping-section { min-width: 0; margin: 20px 0 0; padding: 0; border: 0; border-top: 1px solid #dedee8; }
+.warehouse-mapping-section legend { padding: 0 10px 0 0; font-size: 13px; font-weight: 600; color: #424250; }
+.warehouse-mapping-label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.warehouse-mapping-tag { font-size: 10px; font-weight: 400; color: #6d667a; background: #efedf4; padding: 2px 5px; border-radius: 3px; }
+.warehouse-import-mapping .input-field { align-content: start; min-width: 0; }
+.warehouse-mapping-hint { font-size: 12px; color: #757180; line-height: 1.5; overflow-wrap: anywhere; }
+.warehouse-mapping-managed select { background: #f5f4f7; color: #757180; opacity: 1; }
+.warehouse-import-header-preview { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px 20px; }
+.warehouse-import-header-preview dt { color: #757180; font-size: 12px; }
+.warehouse-import-header-preview dd { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .warehouse-import-mapping select,.warehouse-import-source select,#wh-catalog-record { width: 100%; min-width: 0; padding: 10px; border: 1px solid #dedee8; border-radius: 4px; background: white; }
 .warehouse-import-source input { width: 100%; min-width: 0; }
+.warehouse-file-picker { min-height: 44px; }
+.warehouse-import-source > .input-field { min-width: 0; }
+.warehouse-file-picker > .warehouse-file-name { flex: 1; color: var(--ink-soft); }
+.warehouse-file-picker > span:first-of-type { flex-shrink: 0; }
+.warehouse-file-picker input { width: 1px; }
 .warehouse-import-results { max-height: 340px; overflow: auto; }
 .warehouse-dialog .table-clip,.warehouse-action-dialog .table-clip { min-height: 0; }
 #view-warehouse-flows .data-table th,#view-warehouse-flows .data-table td { white-space: nowrap; }
@@ -13,7 +28,7 @@
 #warehouse-import-dialog summary { cursor: pointer; }
 #warehouse-import-dialog .form-error { max-height: 200px; overflow: auto; }
 #warehouse-import-dialog .form-error li { overflow-wrap: anywhere; }
-@media (max-width: 550px) { .warehouse-import-mapping,.warehouse-import-source { grid-template-columns: minmax(0,1fr); } .warehouse-catalog-actions .button { flex: 1 1 auto; } }
+@media (max-width: 550px) { .warehouse-import-mapping,.warehouse-import-source,.warehouse-import-header-preview { grid-template-columns: minmax(0,1fr); } .warehouse-catalog-actions .button { flex: 1 1 auto; } }
 .warehouse-records .page-heading { margin-bottom: 24px; }
 .warehouse-tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line, #e4e5ed); }
 .warehouse-tabs button { flex: 0 0 auto; padding: 12px 14px; background: none; color: #66677b; border: 0; border-bottom: 2px solid transparent; font: inherit; cursor: pointer; }
