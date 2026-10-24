@@ -71,15 +71,15 @@ function parseCookie(header) {
   return null;
 }
 
-export function sessionCookie(token) {
+export function sessionCookie(token, { secure = false } = {}) {
   if (typeof token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
     throw new TypeError("Invalid session token.");
   }
-  return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`;
+  return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}${secure ? "; Secure" : ""}`;
 }
 
-export function clearSessionCookie() {
-  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+export function clearSessionCookie({ secure = false } = {}) {
+  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure ? "; Secure" : ""}`;
 }
 
 export function createAuth(db) {

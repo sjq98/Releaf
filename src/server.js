@@ -12,6 +12,7 @@ import { createTableImport, parseTableFile } from "./table-import.js";
 import { sessionCookie, clearSessionCookie } from "./auth.js";
 import { ORDER_SPACE_ID } from "./order-system.js";
 import { createWhatsAppBridge } from "./whatsapp-bridge.js";
+import { deploymentConfig, initializeHostedAdmin, assertWorkspaceRequest } from "./deployment.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATIC = new Map([
@@ -74,8 +75,16 @@ async function readJson(request, limit = 256 * 1024) {
 }
 
 export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskAI, env = process.env, aiFetch = fetch, assistantFetch = aiFetch, whatsappOptions = {} } = {}) {
+  const deployment = deploymentConfig(env);
   const store = createStore(database);
   const auth = store.auth;
+  try {
+    initializeHostedAdmin(auth, env, deployment);
+  } catch (error) {
+    store.close();
+    throw error;
+  }
+  const cookieOptions = { secure: deployment.hosted };
   const aiConfig = createAIConfig({ store, env, fetchImpl: aiFetch });
   store.meetings.initialize();
   store.meetings.configure({ aiConfig, fetchImpl: aiFetch });
@@ -96,22 +105,18 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
     };
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "same-origin");
+    if (deployment.hosted) response.setHeader("Strict-Transport-Security", "max-age=31536000");
     response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
     try {
       const url = new URL(request.url, "http://localhost");
       const { pathname } = url;
       const method = request.method;
+      if (pathname === "/healthz" && method === "GET") {
+        auth.status();
+        return send(200, { status: "ok" });
+      }
       if (pathname.startsWith("/api/")) {
-        const origin = request.headers.origin;
-        if (origin && origin !== `http://${request.headers.host}`) throw new AppError(403, "Cross-origin requests are not allowed.");
-        const host = new URL(`http://${request.headers.host}`).hostname;
-        const localAddress = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress);
-        if (!["127.0.0.1", "localhost", "[::1]"].includes(host)) throw new AppError(403, "Use the local workspace address.");
-        if (!pathname.startsWith("/api/agent/")) {
-          if (!localAddress) throw new AppError(403, "Workspace administration is local-only.");
-          if (request.headers.authorization) throw new AppError(403, "Agent tokens may only access /api/agent/ endpoints.");
-          if (request.headers["sec-fetch-site"] === "cross-site") throw new AppError(403, "Cross-site requests are not allowed.");
-        }
+        assertWorkspaceRequest(request, pathname, deployment);
         if (pathname === "/api/auth/status" && method === "GET") {
           let user = null;
           try { user = auth.authenticate(request.headers.cookie); } catch (error) { if (error.status !== 401) throw error; }
@@ -120,14 +125,15 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
         if (method === "POST" && ["/api/auth/setup", "/api/auth/register", "/api/auth/login"].includes(pathname)) {
           const body = await readJson(request, 8 * 1024);
           const action = pathname.slice("/api/auth/".length);
+          if (deployment.hosted && action === "setup") throw new AppError(403, "Hosted administrator setup is managed by deployment settings.");
           const result = auth[action](body, request.socket.remoteAddress);
-          response.setHeader("Set-Cookie", sessionCookie(result.sessionToken));
+          response.setHeader("Set-Cookie", sessionCookie(result.sessionToken, cookieOptions));
           return send(action === "login" ? 200 : 201, { user: result.user, permissions: auth.permissions(result.user) });
         }
         if (pathname === "/api/auth/logout" && method === "POST") {
           await readJson(request, 8 * 1024);
           const result = auth.logout(request.headers.cookie);
-          response.setHeader("Set-Cookie", clearSessionCookie());
+          response.setHeader("Set-Cookie", clearSessionCookie(cookieOptions));
           return send(200, result);
         }
         if (pathname.startsWith("/api/agent/")) {
@@ -138,7 +144,7 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
         return await auth.withUser(user, async () => {
         if (pathname === "/api/auth/password" && method === "POST") {
           const result = auth.changePassword(await readJson(request, 8 * 1024));
-          response.setHeader("Set-Cookie", sessionCookie(result.sessionToken));
+          response.setHeader("Set-Cookie", sessionCookie(result.sessionToken, cookieOptions));
           return send(200, { changed: true, user: result.user, permissions: auth.permissions(result.user) });
         }
         if (pathname === "/api/auth/assignees" && method === "GET") return send(200, auth.assignees());
@@ -426,7 +432,12 @@ export function createApp({ database = resolve(ROOT, "data/forms.sqlite"), taskA
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const deployment = deploymentConfig(process.env);
   const port = Number(process.env.PORT || 5174);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be an integer from 1 to 65535.");
+  if (deployment.hosted && (!process.env.ORDER_DB || process.env.ORDER_DB === ":memory:")) {
+    throw new Error("Set ORDER_DB to a SQLite path on the hosted service's persistent disk.");
+  }
   const database = process.env.ORDER_DB ? resolve(process.env.ORDER_DB) : undefined;
   const { server, store } = createApp({ database });
   server.on("error", (error) => {
@@ -434,7 +445,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     store.close();
     process.exitCode = 1;
   });
-  server.listen(port, "127.0.0.1", () => console.log(`Form Studio: http://127.0.0.1:${port}`));
+  server.listen(port, deployment.host, () => console.log(`Releaf: ${deployment.origin || `http://127.0.0.1:${port}`}`));
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => server.close(() => {
       store.close();

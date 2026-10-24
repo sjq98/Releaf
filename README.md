@@ -154,7 +154,7 @@ Browser HTML/CSS/JavaScript -> authenticated Node.js HTTP API -> local SQLite. F
 | Import / documents | ExcelJS, csv-parse, PDF.js; Decimal.js for quantity arithmetic |
 | Rules / formulas | Restricted jsep expressions, Decimal.js arithmetic, fixed warehouse transactions and same-form notifications |
 | AI | Configurable compatible provider; no model bundled |
-| Hosting | Local loopback server at present |
+| Hosting | Local loopback by default; optional Render demo deployment |
 | Testing | Built-in Node.js test runner |
 
 See [architecture](docs/architecture.md) and the [technical inventory](docs/technical-inventory.md).
@@ -179,7 +179,7 @@ The implementation keeps record IDs stable when labels change, validates schema 
 - Complete required sponsor-platform usage and collect genuine evidence.
 - Prepare judge-accessible deployment, slides, demo video, and signed PDFs.
 
-The server binds to `127.0.0.1`. Browser APIs require a login session; external Agent endpoints require a token and enforce its owner's current role. Accounts share the local workspace rather than isolated tenants. Judge-facing cloud deployment still needs tenant ownership boundaries, TLS, a deployment-specific Host/proxy policy and production secret storage before exposure.
+The local server binds to `127.0.0.1`. An optional hosted demo binds to `0.0.0.0`, restricts APIs to its configured HTTPS origin, uses Secure session cookies and provisions the first administrator from private deployment settings. See [Render deployment](docs/render-deployment.md) for required persistent storage and environment settings. Accounts share a workspace rather than isolated tenants; use only non-sensitive demo data, not production or private business records. Browser APIs require a login session; external Agent endpoints require a token and enforce its owner's current role.
 
 ## Team
 
